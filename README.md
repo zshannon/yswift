@@ -16,6 +16,22 @@ To build the package from source, you need both Rust and XCode installed.
 The GitHub releases should include versioned links to the `yniffiFFI`.
 Development releases expect that you will build you own local copy using `./scripts/build-xcframework.sh`.
 
+## Releasing
+
+To create a new release:
+
+```bash
+./scripts/release.sh <version>
+```
+
+This script:
+1. Builds the xcframework for all platforms
+2. Updates `Package.swift` with the new download URL and checksum
+3. Commits, tags, and pushes to GitHub
+4. Creates a GitHub release with the xcframework attached
+
+Requires the `gh` CLI to be installed and authenticated.
+
 ## Decision log
 
 This project maintains a [decision log](./devnotes/DevLog.md).

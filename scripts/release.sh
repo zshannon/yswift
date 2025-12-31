@@ -75,7 +75,7 @@ git push origin main --tags
 
 # Step 7: Create GitHub release (run through login shell for 1Password integration)
 echo "📦 Creating GitHub release..."
-$SHELL -l -i -c "gh release create '$VERSION' --title '$VERSION' --notes 'Release $VERSION' lib/yniffiFFI.xcframework.zip"
+$SHELL -l -i -c "gh release create '$VERSION' --repo '$REPO' --title '$VERSION' --notes 'Release $VERSION' lib/yniffiFFI.xcframework.zip"
 
 echo ""
 echo "✅ Released $VERSION!"

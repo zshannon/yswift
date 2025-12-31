@@ -1,12 +1,12 @@
+use crate::doc::{YrsCollectionPtr, YrsDoc};
 use crate::subscription::YSubscription;
 use crate::transaction::YrsTransaction;
 use crate::{change::YrsChange, error::CodingError};
 use std::cell::RefCell;
 use std::fmt::Debug;
 use std::sync::Arc;
-use yrs::{types::Value, Any, Array, ArrayRef, Observable};
 use yrs::branch::Branch;
-use crate::doc::YrsCollectionPtr;
+use yrs::{Any, Array, ArrayRef, Observable, Out};
 
 pub(crate) struct YrsArray(RefCell<ArrayRef>);
 
@@ -48,7 +48,7 @@ pub(crate) trait YrsArrayObservationDelegate: Send + Sync + Debug {
 //         match val {
 //             Some(val) => {
 //                 let mut buf = String::new();
-//                 if let Value::Any(any) = val {
+//                 if let Out::Any(any) = val {
 //                     any.to_json(&mut buf);
 //                     Some(buf)
 //                 } else {
@@ -84,7 +84,7 @@ impl YrsArray {
         let arr = self.0.borrow();
         arr.iter(tx).for_each(|val| {
             let mut buf = String::new();
-            if let Value::Any(any) = val {
+            if let Out::Any(any) = val {
                 any.to_json(&mut buf);
                 delegate.call(buf);
             } else {
@@ -104,7 +104,7 @@ impl YrsArray {
         let arr = self.0.borrow();
         if let Some(value) = arr.get(tx, index) {
             let mut buf = String::new();
-            if let Value::Any(any) = value {
+            if let Out::Any(any) = value {
                 any.to_json(&mut buf);
                 Ok(buf)
             } else {
@@ -209,7 +209,7 @@ impl YrsArray {
             .iter(tx)
             .filter_map(|v| {
                 let mut buf = String::new();
-                if let Value::Any(any) = v {
+                if let Out::Any(any) = v {
                     any.to_json(&mut buf);
                     Some(buf)
                 } else {
@@ -219,5 +219,43 @@ impl YrsArray {
             .collect::<Vec<String>>();
 
         arr
+    }
+
+    // MARK: - Subdoc methods
+
+    /// Gets a subdocument at the specified index.
+    /// Returns None if the index is out of bounds or the value is not a document.
+    pub(crate) fn get_doc(
+        &self,
+        transaction: &YrsTransaction,
+        index: u32,
+    ) -> Option<Arc<YrsDoc>> {
+        let tx = transaction.transaction();
+        let tx = tx.as_ref().unwrap();
+        let arr = self.0.borrow();
+
+        if let Some(Out::YDoc(doc)) = arr.get(tx, index) {
+            Some(Arc::new(YrsDoc::from_doc(doc)))
+        } else {
+            None
+        }
+    }
+
+    /// Inserts a subdocument at the specified index.
+    /// Returns a reference to the integrated subdocument.
+    pub(crate) fn insert_doc(
+        &self,
+        transaction: &YrsTransaction,
+        index: u32,
+        doc: &YrsDoc,
+    ) -> Arc<YrsDoc> {
+        let mut tx = transaction.transaction();
+        let tx = tx.as_mut().unwrap();
+        let arr = self.0.borrow_mut();
+
+        // Clone the inner Doc and insert it
+        let inner_doc = doc.inner().clone();
+        let inserted = arr.insert(tx, index, inner_doc);
+        Arc::new(YrsDoc::from_doc(inserted))
     }
 }

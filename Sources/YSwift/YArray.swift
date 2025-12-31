@@ -286,3 +286,32 @@ extension YArrayChange: Equatable where T: Equatable {
 }
 
 extension YArrayChange: Hashable where T: Hashable {}
+
+// MARK: - Subdocument Support
+
+extension YArray {
+    /// Returns a subdocument at the specified index.
+    /// - Parameters:
+    ///   - index: The index position of the subdocument.
+    ///   - transaction: An optional transaction to use.
+    /// - Returns: The subdocument at the specified index, or nil if no subdocument exists at that index.
+    public func getSubdoc(at index: Int, transaction: YrsTransaction? = nil) -> YDocument? {
+        withTransaction(transaction) { txn in
+            self._array.getDoc(tx: txn, index: UInt32(index)).map { YDocument(wrapping: $0) }
+        }
+    }
+
+    /// Inserts a subdocument at the specified index.
+    /// - Parameters:
+    ///   - index: The index position where the subdocument should be inserted.
+    ///   - subdoc: The subdocument to insert.
+    ///   - transaction: An optional transaction to use.
+    /// - Returns: The integrated subdocument (may be different from the input if the document was already integrated).
+    @discardableResult
+    public func insertSubdoc(at index: Int, _ subdoc: YDocument, transaction: YrsTransaction? = nil) -> YDocument {
+        withTransaction(transaction) { txn in
+            let inserted = self._array.insertDoc(tx: txn, index: UInt32(index), doc: subdoc.document)
+            return YDocument(wrapping: inserted)
+        }
+    }
+}

@@ -42,17 +42,18 @@ impl YrsUndoManager {
 
     pub(crate) fn undo(&self) -> Result<bool, YrsUndoError> {
         let mut m = self.acquire_lock();
-        m.undo().map_err(|_| YrsUndoError::PendingTransaction)
+        Ok(pollster::block_on(m.undo()))
     }
 
     pub(crate) fn redo(&self) -> Result<bool, YrsUndoError> {
         let mut m = self.acquire_lock();
-        m.redo().map_err(|_| YrsUndoError::PendingTransaction)
+        Ok(pollster::block_on(m.redo()))
     }
 
     pub(crate) fn clear(&self) -> Result<(), YrsUndoError> {
         let mut m = self.acquire_lock();
-        m.clear().map_err(|_| YrsUndoError::PendingTransaction)
+        m.clear();
+        Ok(())
     }
 
     pub(crate) fn wrap_changes(&self) {

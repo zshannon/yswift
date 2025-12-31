@@ -1,4 +1,5 @@
-use yrs::types::{EntryChange, Value};
+use yrs::types::EntryChange;
+use yrs::Out;
 
 pub struct YrsMapChange {
     pub key: String,
@@ -22,7 +23,7 @@ impl From<&EntryChange> for YrsEntryChange {
     fn from(item: &EntryChange) -> Self {
         match item {
             EntryChange::Inserted(value) => {
-                if let Value::Any(val) = value {
+                if let Out::Any(val) = value {
                     let mut buf = String::new();
                     val.to_json(&mut buf);
                     YrsEntryChange::Inserted { value: buf }
@@ -32,7 +33,7 @@ impl From<&EntryChange> for YrsEntryChange {
                 }
             }
             EntryChange::Updated(old_value, new_value) => {
-                if let (Value::Any(old), Value::Any(new)) = (old_value, new_value) {
+                if let (Out::Any(old), Out::Any(new)) = (old_value, new_value) {
                     let mut old_string = String::new();
                     let mut new_string = String::new();
                     old.to_json(&mut old_string);
@@ -50,7 +51,7 @@ impl From<&EntryChange> for YrsEntryChange {
                 }
             }
             EntryChange::Removed(value) => {
-                if let Value::Any(val) = value {
+                if let Out::Any(val) = value {
                     let mut buf = String::new();
                     val.to_json(&mut buf);
                     YrsEntryChange::Removed { value: buf }

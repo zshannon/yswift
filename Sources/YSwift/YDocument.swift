@@ -1,9 +1,10 @@
+import Combine
 import Foundation
 import Yniffi
 
 /// YDocument holds YSwift shared data types and coordinates collaboration and changes.
 public final class YDocument {
-    private let document: YrsDoc
+    let document: YrsDoc
     /// Multiple `YDocument` instances are supported. Because `label` is required only for debugging purposes.
     /// It is not used for unique differentiation between queues. So we safely get unique queue for each `YDocument` instance.
     private let transactionQueue = DispatchQueue(label: "YSwift.YDocument", qos: .userInitiated)
@@ -11,6 +12,131 @@ public final class YDocument {
     /// Create a new YSwift Document.
     public init() {
         document = YrsDoc()
+    }
+
+    /// Create a new YSwift Document with custom options.
+    /// - Parameter options: Configuration options for the document.
+    public init(options: YDocumentOptions) {
+        document = YrsDoc.newWithOptions(options: options.yrsOptions)
+    }
+
+    /// Internal initializer for wrapping a YrsDoc (used when retrieving subdocuments).
+    internal init(wrapping doc: YrsDoc) {
+        document = doc
+    }
+
+    // MARK: - Identity Properties
+
+    /// Whether this document will automatically load when accessed as a subdocument.
+    public var autoLoad: Bool {
+        document.autoLoad()
+    }
+
+    /// The client ID of this document.
+    public var clientId: UInt64 {
+        document.clientId()
+    }
+
+    /// The unique identifier (GUID) of this document.
+    public var guid: String {
+        document.guid()
+    }
+
+    /// Whether this document should be loaded when accessed.
+    public var shouldLoad: Bool {
+        document.shouldLoad()
+    }
+
+    /// The parent document if this is a subdocument, or nil if this is a root document.
+    public var parentDocument: YDocument? {
+        document.parentDoc().map { YDocument(wrapping: $0) }
+    }
+
+    // MARK: - Identity Methods
+
+    /// Returns whether this document is the same instance as another document.
+    /// - Parameter other: The document to compare with.
+    /// - Returns: True if both documents reference the same underlying document.
+    public func isSame(as other: YDocument) -> Bool {
+        document.ptrEq(other: other.document)
+    }
+
+    // MARK: - Subdocument Lifecycle
+
+    /// Loads a subdocument. Call this within a transaction of the parent document.
+    /// - Parameter transaction: A transaction from the parent document.
+    public func load(in transaction: YrsTransaction) {
+        document.load(parentTxn: transaction)
+    }
+
+    /// Destroys and removes this subdocument from its parent. Call this within a transaction of the parent document.
+    /// - Parameter transaction: A transaction from the parent document.
+    public func destroy(in transaction: YrsTransaction) {
+        document.destroy(parentTxn: transaction)
+    }
+
+    // MARK: - Subdocument Observation
+
+    /// Registers a closure that is called when subdocuments are added, loaded, or removed.
+    /// - Parameter body: A closure that receives the subdocs event.
+    /// - Returns: A subscription that can be used to cancel the observation.
+    public func observeSubdocs(_ body: @escaping (YSubdocsEvent) -> Void) -> YSubscription {
+        let delegate = YSubdocsObservationDelegateWrapper(callback: body)
+        return YSubscription(subscription: document.observeSubdocs(delegate: delegate))
+    }
+
+    /// Returns a publisher that emits subdocument lifecycle events.
+    public func observeSubdocs() -> AnyPublisher<YSubdocsEvent, Never> {
+        let subject = PassthroughSubject<YSubdocsEvent, Never>()
+        let subscription = observeSubdocs { subject.send($0) }
+        return subject.handleEvents(receiveCancel: {
+            subscription.cancel()
+        })
+        .eraseToAnyPublisher()
+    }
+
+    /// Registers a closure that is called when this document is destroyed.
+    /// - Parameter body: A closure that is called when the document is destroyed.
+    /// - Returns: A subscription that can be used to cancel the observation.
+    public func observeDestroy(_ body: @escaping () -> Void) -> YSubscription {
+        let delegate = YDestroyObservationDelegateWrapper(callback: body)
+        return YSubscription(subscription: document.observeDestroy(delegate: delegate))
+    }
+
+    /// Returns a publisher that emits when this document is destroyed.
+    public func observeDestroy() -> AnyPublisher<Void, Never> {
+        let subject = PassthroughSubject<Void, Never>()
+        let subscription = observeDestroy { subject.send(()) }
+        return subject.handleEvents(receiveCancel: {
+            subscription.cancel()
+        })
+        .eraseToAnyPublisher()
+    }
+
+    // MARK: - Subdocument Queries
+
+    /// Returns the GUIDs of all subdocuments in this document.
+    /// - Parameter transaction: An optional transaction to use. If not provided, a new one is created.
+    /// - Returns: An array of subdocument GUIDs.
+    public func subdocGuids(transaction: YrsTransaction? = nil) -> [String] {
+        if let transaction = transaction {
+            return transaction.subdocGuids()
+        } else {
+            return transactSync { $0.subdocGuids() }
+        }
+    }
+
+    /// Returns all subdocuments in this document.
+    /// - Parameter transaction: An optional transaction to use. If not provided, a new one is created.
+    /// - Returns: An array of subdocuments.
+    public func subdocs(transaction: YrsTransaction? = nil) -> [YDocument] {
+        if let transaction = transaction {
+            return transaction.subdocs().map { YDocument(wrapping: $0) }
+        } else {
+            return transactSync { txn in
+                txn.subdocs().map { YDocument(wrapping: $0) }
+            }
+        }
     }
 
     /// Compares the state vector from another YSwift document to return a data buffer you can use to synchronize with another YSwift document.

@@ -1,5 +1,6 @@
 use crate::attrs::YrsAttrs;
-use yrs::types::{Delta, Value};
+use yrs::types::Delta;
+use yrs::Out;
 
 pub enum YrsDelta {
     Inserted { value: String, attrs: String },
@@ -16,7 +17,7 @@ impl From<&Delta> for YrsDelta {
         match item {
             Delta::Inserted(value, attrs) => {
                 let mut buf = String::new();
-                if let Value::Any(any) = value {
+                if let Out::Any(any) = value {
                     any.to_json(&mut buf);
                     let attrs = YrsAttrs::from(*attrs.clone().unwrap_or_default());
                     YrsDelta::Inserted {

@@ -1,15 +1,16 @@
 use crate::array::YrsArray;
 use crate::error::CodingError;
 use crate::map::YrsMap;
+use crate::subdoc::{YrsDestroyObservationDelegate, YrsDocOptions, YrsSubdocsEvent, YrsSubdocsObservationDelegate};
+use crate::subscription::YSubscription;
 use crate::text::YrsText;
 use crate::transaction::YrsTransaction;
-use std::sync::Arc;
-use std::{borrow::Borrow, cell::RefCell};
-use yrs::{updates::decoder::Decode, ArrayRef, Doc, OffsetKind, Options, StateVector, Transact, Origin};
-use yrs::{MapRef, ReadTxn};
-use yrs::branch::Branch;
 use crate::undo::YrsUndoManager;
 use crate::UniffiCustomTypeConverter;
+use std::sync::Arc;
+use std::{borrow::Borrow, cell::RefCell};
+use yrs::branch::Branch;
+use yrs::{updates::decoder::Decode, ArrayRef, Doc, MapRef, OffsetKind, Options, Origin, ReadTxn, StateVector, Transact};
 
 pub(crate) struct YrsDoc(RefCell<Doc>);
 
@@ -72,6 +73,133 @@ impl YrsDoc {
             undo_manager.expand_scope(&n);
         }
         Arc::new(YrsUndoManager::from(undo_manager))
+    }
+
+    // MARK: - Subdoc methods
+
+    /// Returns whether auto_load is enabled for this document.
+    pub(crate) fn auto_load(&self) -> bool {
+        self.0.borrow().auto_load()
+    }
+
+    /// Returns the client ID for this document.
+    pub(crate) fn client_id(&self) -> u64 {
+        self.0.borrow().client_id()
+    }
+
+    /// Destroys this subdocument within the parent transaction.
+    pub(crate) fn destroy(&self, parent_txn: &YrsTransaction) {
+        let mut tx = parent_txn.transaction();
+        if let Some(tx) = tx.as_mut() {
+            self.0.borrow().destroy(tx);
+        }
+    }
+
+    /// Returns the globally unique identifier for this document.
+    pub(crate) fn guid(&self) -> String {
+        self.0.borrow().guid().to_string()
+    }
+
+    /// Requests the parent to load this subdocument's data.
+    pub(crate) fn load(&self, parent_txn: &YrsTransaction) {
+        let mut tx = parent_txn.transaction();
+        if let Some(tx) = tx.as_mut() {
+            self.0.borrow().load(tx);
+        }
+    }
+
+    /// Creates a new document with the specified options.
+    pub(crate) fn new_with_options(options: YrsDocOptions) -> Self {
+        let mut opts = Options::default();
+        opts.auto_load = options.auto_load;
+        if let Some(client_id) = options.client_id {
+            opts.client_id = client_id;
+        }
+        if let Some(guid) = options.guid {
+            opts.guid = Arc::from(guid.as_str());
+        }
+        opts.offset_kind = OffsetKind::Utf16;
+        opts.should_load = options.should_load;
+
+        Self(RefCell::from(Doc::with_options(opts)))
+    }
+
+    /// Observes when this document is destroyed.
+    pub(crate) fn observe_destroy(
+        &self,
+        delegate: Box<dyn YrsDestroyObservationDelegate>,
+    ) -> Arc<YSubscription> {
+        let subscription = self
+            .0
+            .borrow()
+            .observe_destroy(move |_txn, _doc| {
+                delegate.call();
+            })
+            .expect("Failed to observe destroy");
+
+        Arc::new(YSubscription::new(subscription))
+    }
+
+    /// Observes subdocument lifecycle changes (added, loaded, removed).
+    pub(crate) fn observe_subdocs(
+        &self,
+        delegate: Box<dyn YrsSubdocsObservationDelegate>,
+    ) -> Arc<YSubscription> {
+        let subscription = self
+            .0
+            .borrow()
+            .observe_subdocs(move |_txn, event| {
+                let added: Vec<Arc<YrsDoc>> = event
+                    .added()
+                    .map(|d| Arc::new(YrsDoc(RefCell::from(d.clone()))))
+                    .collect();
+                let loaded: Vec<Arc<YrsDoc>> = event
+                    .loaded()
+                    .map(|d| Arc::new(YrsDoc(RefCell::from(d.clone()))))
+                    .collect();
+                let removed: Vec<Arc<YrsDoc>> = event
+                    .removed()
+                    .map(|d| Arc::new(YrsDoc(RefCell::from(d.clone()))))
+                    .collect();
+                delegate.call(YrsSubdocsEvent {
+                    added,
+                    loaded,
+                    removed,
+                });
+            })
+            .expect("Failed to observe subdocs");
+
+        Arc::new(YSubscription::new(subscription))
+    }
+
+    /// Returns the parent document if this is a subdocument.
+    pub(crate) fn parent_doc(&self) -> Option<Arc<YrsDoc>> {
+        self.0
+            .borrow()
+            .parent_doc()
+            .map(|doc| Arc::new(YrsDoc(RefCell::from(doc))))
+    }
+
+    /// Checks if two documents are the same instance (reference equality).
+    pub(crate) fn ptr_eq(&self, other: &YrsDoc) -> bool {
+        Doc::ptr_eq(&self.0.borrow(), &other.0.borrow())
+    }
+
+    /// Returns whether this document should be loaded/synced.
+    pub(crate) fn should_load(&self) -> bool {
+        self.0.borrow().should_load()
+    }
+}
+
+impl YrsDoc {
+    /// Creates a YrsDoc from an existing yrs Doc.
+    pub(crate) fn from_doc(doc: Doc) -> Self {
+        Self(RefCell::from(doc))
+    }
+
+    /// Returns the inner Doc for internal use.
+    pub(crate) fn inner(&self) -> std::cell::Ref<'_, Doc> {
+        self.0.borrow()
     }
 }
 

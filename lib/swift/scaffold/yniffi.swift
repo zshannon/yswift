@@ -564,7 +564,11 @@ public protocol YrsArrayProtocol: AnyObject {
 
     func get(tx: YrsTransaction, index: UInt32) throws -> String
 
+    func getDoc(tx: YrsTransaction, index: UInt32) -> YrsDoc?
+
     func insert(tx: YrsTransaction, index: UInt32, value: String)
+
+    func insertDoc(tx: YrsTransaction, index: UInt32, doc: YrsDoc) -> YrsDoc
 
     func insertRange(tx: YrsTransaction, index: UInt32, values: [String])
 
@@ -640,12 +644,29 @@ open class YrsArray:
         })
     }
 
+    open func getDoc(tx: YrsTransaction, index: UInt32) -> YrsDoc? {
+        return try! FfiConverterOptionTypeYrsDoc.lift(try! rustCall {
+            uniffi_uniffi_yniffi_fn_method_yrsarray_get_doc(self.uniffiClonePointer(),
+                                                            FfiConverterTypeYrsTransaction.lower(tx),
+                                                            FfiConverterUInt32.lower(index), $0)
+        })
+    }
+
     open func insert(tx: YrsTransaction, index: UInt32, value: String) { try! rustCall {
         uniffi_uniffi_yniffi_fn_method_yrsarray_insert(self.uniffiClonePointer(),
                                                        FfiConverterTypeYrsTransaction.lower(tx),
                                                        FfiConverterUInt32.lower(index),
                                                        FfiConverterString.lower(value), $0)
     }
+    }
+
+    open func insertDoc(tx: YrsTransaction, index: UInt32, doc: YrsDoc) -> YrsDoc {
+        return try! FfiConverterTypeYrsDoc.lift(try! rustCall {
+            uniffi_uniffi_yniffi_fn_method_yrsarray_insert_doc(self.uniffiClonePointer(),
+                                                               FfiConverterTypeYrsTransaction.lower(tx),
+                                                               FfiConverterUInt32.lower(index),
+                                                               FfiConverterTypeYrsDoc.lower(doc), $0)
+        })
     }
 
     open func insertRange(tx: YrsTransaction, index: UInt32, values: [String]) { try! rustCall {
@@ -752,6 +773,12 @@ public func FfiConverterTypeYrsArray_lower(_ value: YrsArray) -> UnsafeMutableRa
 }
 
 public protocol YrsDocProtocol: AnyObject {
+    func autoLoad() -> Bool
+
+    func clientId() -> UInt64
+
+    func destroy(parentTxn: YrsTransaction)
+
     func encodeDiffV1(tx: YrsTransaction, stateVector: [UInt8]) throws -> [UInt8]
 
     func getArray(name: String) -> YrsArray
@@ -759,6 +786,20 @@ public protocol YrsDocProtocol: AnyObject {
     func getMap(name: String) -> YrsMap
 
     func getText(name: String) -> YrsText
+
+    func guid() -> String
+
+    func load(parentTxn: YrsTransaction)
+
+    func observeDestroy(delegate: YrsDestroyObservationDelegate) -> YSubscription
+
+    func observeSubdocs(delegate: YrsSubdocsObservationDelegate) -> YSubscription
+
+    func parentDoc() -> YrsDoc?
+
+    func ptrEq(other: YrsDoc) -> Bool
+
+    func shouldLoad() -> Bool
 
     func transact(origin: YrsOrigin?) -> YrsTransaction
 
@@ -812,6 +853,32 @@ open class YrsDoc:
         try! rustCall { uniffi_uniffi_yniffi_fn_free_yrsdoc(pointer, $0) }
     }
 
+    public static func newWithOptions(options: YrsDocOptions) -> YrsDoc {
+        return try! FfiConverterTypeYrsDoc.lift(try! rustCall {
+            uniffi_uniffi_yniffi_fn_constructor_yrsdoc_new_with_options(
+                FfiConverterTypeYrsDocOptions.lower(options), $0
+            )
+        })
+    }
+
+    open func autoLoad() -> Bool {
+        return try! FfiConverterBool.lift(try! rustCall {
+            uniffi_uniffi_yniffi_fn_method_yrsdoc_auto_load(self.uniffiClonePointer(), $0)
+        })
+    }
+
+    open func clientId() -> UInt64 {
+        return try! FfiConverterUInt64.lift(try! rustCall {
+            uniffi_uniffi_yniffi_fn_method_yrsdoc_client_id(self.uniffiClonePointer(), $0)
+        })
+    }
+
+    open func destroy(parentTxn: YrsTransaction) { try! rustCall {
+        uniffi_uniffi_yniffi_fn_method_yrsdoc_destroy(self.uniffiClonePointer(),
+                                                      FfiConverterTypeYrsTransaction.lower(parentTxn), $0)
+    }
+    }
+
     open func encodeDiffV1(tx: YrsTransaction, stateVector: [UInt8]) throws -> [UInt8] {
         return try FfiConverterSequenceUInt8.lift(rustCallWithError(FfiConverterTypeCodingError.lift) {
             uniffi_uniffi_yniffi_fn_method_yrsdoc_encode_diff_v1(self.uniffiClonePointer(),
@@ -838,6 +905,51 @@ open class YrsDoc:
         return try! FfiConverterTypeYrsText.lift(try! rustCall {
             uniffi_uniffi_yniffi_fn_method_yrsdoc_get_text(self.uniffiClonePointer(),
                                                            FfiConverterString.lower(name), $0)
+        })
+    }
+
+    open func guid() -> String {
+        return try! FfiConverterString.lift(try! rustCall {
+            uniffi_uniffi_yniffi_fn_method_yrsdoc_guid(self.uniffiClonePointer(), $0)
+        })
+    }
+
+    open func load(parentTxn: YrsTransaction) { try! rustCall {
+        uniffi_uniffi_yniffi_fn_method_yrsdoc_load(self.uniffiClonePointer(),
+                                                   FfiConverterTypeYrsTransaction.lower(parentTxn), $0)
+    }
+    }
+
+    open func observeDestroy(delegate: YrsDestroyObservationDelegate) -> YSubscription {
+        return try! FfiConverterTypeYSubscription.lift(try! rustCall {
+            uniffi_uniffi_yniffi_fn_method_yrsdoc_observe_destroy(self.uniffiClonePointer(),
+                                                                  FfiConverterCallbackInterfaceYrsDestroyObservationDelegate.lower(delegate), $0)
+        })
+    }
+
+    open func observeSubdocs(delegate: YrsSubdocsObservationDelegate) -> YSubscription {
+        return try! FfiConverterTypeYSubscription.lift(try! rustCall {
+            uniffi_uniffi_yniffi_fn_method_yrsdoc_observe_subdocs(self.uniffiClonePointer(),
+                                                                  FfiConverterCallbackInterfaceYrsSubdocsObservationDelegate.lower(delegate), $0)
+        })
+    }
+
+    open func parentDoc() -> YrsDoc? {
+        return try! FfiConverterOptionTypeYrsDoc.lift(try! rustCall {
+            uniffi_uniffi_yniffi_fn_method_yrsdoc_parent_doc(self.uniffiClonePointer(), $0)
+        })
+    }
+
+    open func ptrEq(other: YrsDoc) -> Bool {
+        return try! FfiConverterBool.lift(try! rustCall {
+            uniffi_uniffi_yniffi_fn_method_yrsdoc_ptr_eq(self.uniffiClonePointer(),
+                                                         FfiConverterTypeYrsDoc.lower(other), $0)
+        })
+    }
+
+    open func shouldLoad() -> Bool {
+        return try! FfiConverterBool.lift(try! rustCall {
+            uniffi_uniffi_yniffi_fn_method_yrsdoc_should_load(self.uniffiClonePointer(), $0)
         })
     }
 
@@ -903,7 +1015,11 @@ public protocol YrsMapProtocol: AnyObject {
 
     func get(tx: YrsTransaction, key: String) throws -> String
 
+    func getDoc(tx: YrsTransaction, key: String) -> YrsDoc?
+
     func insert(tx: YrsTransaction, key: String, value: String)
+
+    func insertDoc(tx: YrsTransaction, key: String, doc: YrsDoc) -> YrsDoc
 
     func keys(tx: YrsTransaction, delegate: YrsMapIteratorDelegate)
 
@@ -987,12 +1103,29 @@ open class YrsMap:
         })
     }
 
+    open func getDoc(tx: YrsTransaction, key: String) -> YrsDoc? {
+        return try! FfiConverterOptionTypeYrsDoc.lift(try! rustCall {
+            uniffi_uniffi_yniffi_fn_method_yrsmap_get_doc(self.uniffiClonePointer(),
+                                                          FfiConverterTypeYrsTransaction.lower(tx),
+                                                          FfiConverterString.lower(key), $0)
+        })
+    }
+
     open func insert(tx: YrsTransaction, key: String, value: String) { try! rustCall {
         uniffi_uniffi_yniffi_fn_method_yrsmap_insert(self.uniffiClonePointer(),
                                                      FfiConverterTypeYrsTransaction.lower(tx),
                                                      FfiConverterString.lower(key),
                                                      FfiConverterString.lower(value), $0)
     }
+    }
+
+    open func insertDoc(tx: YrsTransaction, key: String, doc: YrsDoc) -> YrsDoc {
+        return try! FfiConverterTypeYrsDoc.lift(try! rustCall {
+            uniffi_uniffi_yniffi_fn_method_yrsmap_insert_doc(self.uniffiClonePointer(),
+                                                             FfiConverterTypeYrsTransaction.lower(tx),
+                                                             FfiConverterString.lower(key),
+                                                             FfiConverterTypeYrsDoc.lower(doc), $0)
+        })
     }
 
     open func keys(tx: YrsTransaction, delegate: YrsMapIteratorDelegate) { try! rustCall {
@@ -1269,6 +1402,10 @@ public protocol YrsTransactionProtocol: AnyObject {
 
     func origin() -> YrsOrigin?
 
+    func subdocGuids() -> [String]
+
+    func subdocs() -> [YrsDoc]
+
     func transactionApplyUpdate(update: [UInt8]) throws
 
     func transactionEncodeStateAsUpdate() -> [UInt8]
@@ -1334,6 +1471,18 @@ open class YrsTransaction:
     open func origin() -> YrsOrigin? {
         return try! FfiConverterOptionTypeYrsOrigin.lift(try! rustCall {
             uniffi_uniffi_yniffi_fn_method_yrstransaction_origin(self.uniffiClonePointer(), $0)
+        })
+    }
+
+    open func subdocGuids() -> [String] {
+        return try! FfiConverterSequenceString.lift(try! rustCall {
+            uniffi_uniffi_yniffi_fn_method_yrstransaction_subdoc_guids(self.uniffiClonePointer(), $0)
+        })
+    }
+
+    open func subdocs() -> [YrsDoc] {
+        return try! FfiConverterSequenceTypeYrsDoc.lift(try! rustCall {
+            uniffi_uniffi_yniffi_fn_method_yrstransaction_subdocs(self.uniffiClonePointer(), $0)
         })
     }
 
@@ -1764,6 +1913,77 @@ public func FfiConverterTypeYrsUndoManager_lower(_ value: YrsUndoManager) -> Uns
     return FfiConverterTypeYrsUndoManager.lower(value)
 }
 
+/**
+ * Options for creating a YrsDoc with specific configuration.
+ */
+public struct YrsDocOptions {
+    public var autoLoad: Bool
+    public var clientId: UInt64?
+    public var guid: String?
+    public var shouldLoad: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(autoLoad: Bool, clientId: UInt64?, guid: String?, shouldLoad: Bool) {
+        self.autoLoad = autoLoad
+        self.clientId = clientId
+        self.guid = guid
+        self.shouldLoad = shouldLoad
+    }
+}
+
+extension YrsDocOptions: Equatable, Hashable {
+    public static func == (lhs: YrsDocOptions, rhs: YrsDocOptions) -> Bool {
+        if lhs.autoLoad != rhs.autoLoad {
+            return false
+        }
+        if lhs.clientId != rhs.clientId {
+            return false
+        }
+        if lhs.guid != rhs.guid {
+            return false
+        }
+        if lhs.shouldLoad != rhs.shouldLoad {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(autoLoad)
+        hasher.combine(clientId)
+        hasher.combine(guid)
+        hasher.combine(shouldLoad)
+    }
+}
+
+public struct FfiConverterTypeYrsDocOptions: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> YrsDocOptions {
+        return
+            try YrsDocOptions(
+                autoLoad: FfiConverterBool.read(from: &buf),
+                clientId: FfiConverterOptionUInt64.read(from: &buf),
+                guid: FfiConverterOptionString.read(from: &buf),
+                shouldLoad: FfiConverterBool.read(from: &buf)
+            )
+    }
+
+    public static func write(_ value: YrsDocOptions, into buf: inout [UInt8]) {
+        FfiConverterBool.write(value.autoLoad, into: &buf)
+        FfiConverterOptionUInt64.write(value.clientId, into: &buf)
+        FfiConverterOptionString.write(value.guid, into: &buf)
+        FfiConverterBool.write(value.shouldLoad, into: &buf)
+    }
+}
+
+public func FfiConverterTypeYrsDocOptions_lift(_ buf: RustBuffer) throws -> YrsDocOptions {
+    return try FfiConverterTypeYrsDocOptions.lift(buf)
+}
+
+public func FfiConverterTypeYrsDocOptions_lower(_ value: YrsDocOptions) -> RustBuffer {
+    return FfiConverterTypeYrsDocOptions.lower(value)
+}
+
 public struct YrsMapChange {
     public var key: String
     public var change: YrsEntryChange
@@ -1814,6 +2034,48 @@ public func FfiConverterTypeYrsMapChange_lift(_ buf: RustBuffer) throws -> YrsMa
 
 public func FfiConverterTypeYrsMapChange_lower(_ value: YrsMapChange) -> RustBuffer {
     return FfiConverterTypeYrsMapChange.lower(value)
+}
+
+/**
+ * Event emitted when subdocuments are added, loaded, or removed.
+ */
+public struct YrsSubdocsEvent {
+    public var added: [YrsDoc]
+    public var loaded: [YrsDoc]
+    public var removed: [YrsDoc]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(added: [YrsDoc], loaded: [YrsDoc], removed: [YrsDoc]) {
+        self.added = added
+        self.loaded = loaded
+        self.removed = removed
+    }
+}
+
+public struct FfiConverterTypeYrsSubdocsEvent: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> YrsSubdocsEvent {
+        return
+            try YrsSubdocsEvent(
+                added: FfiConverterSequenceTypeYrsDoc.read(from: &buf),
+                loaded: FfiConverterSequenceTypeYrsDoc.read(from: &buf),
+                removed: FfiConverterSequenceTypeYrsDoc.read(from: &buf)
+            )
+    }
+
+    public static func write(_ value: YrsSubdocsEvent, into buf: inout [UInt8]) {
+        FfiConverterSequenceTypeYrsDoc.write(value.added, into: &buf)
+        FfiConverterSequenceTypeYrsDoc.write(value.loaded, into: &buf)
+        FfiConverterSequenceTypeYrsDoc.write(value.removed, into: &buf)
+    }
+}
+
+public func FfiConverterTypeYrsSubdocsEvent_lift(_ buf: RustBuffer) throws -> YrsSubdocsEvent {
+    return try FfiConverterTypeYrsSubdocsEvent.lift(buf)
+}
+
+public func FfiConverterTypeYrsSubdocsEvent_lower(_ value: YrsSubdocsEvent) -> RustBuffer {
+    return FfiConverterTypeYrsSubdocsEvent.lower(value)
 }
 
 public enum CodingError {
@@ -2250,6 +2512,79 @@ extension FfiConverterCallbackInterfaceYrsArrayObservationDelegate: FfiConverter
     }
 }
 
+/**
+ * Delegate for observing document destruction.
+ */
+public protocol YrsDestroyObservationDelegate: AnyObject {
+    func call()
+}
+
+// Put the implementation in a struct so we don't pollute the top-level namespace
+private enum UniffiCallbackInterfaceYrsDestroyObservationDelegate {
+    // Create the VTable using a series of closures.
+    // Swift automatically converts these into C callback functions.
+    static var vtable: UniffiVTableCallbackInterfaceYrsDestroyObservationDelegate = .init(
+        call: { (
+            uniffiHandle: UInt64,
+            _: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceYrsDestroyObservationDelegate.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.call(
+                )
+            }
+
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        uniffiFree: { (uniffiHandle: UInt64) in
+            let result = try? FfiConverterCallbackInterfaceYrsDestroyObservationDelegate.handleMap.remove(handle: uniffiHandle)
+            if result == nil {
+                print("Uniffi callback interface YrsDestroyObservationDelegate: handle missing in uniffiFree")
+            }
+        }
+    )
+}
+
+private func uniffiCallbackInitYrsDestroyObservationDelegate() {
+    uniffi_uniffi_yniffi_fn_init_callback_vtable_yrsdestroyobservationdelegate(&UniffiCallbackInterfaceYrsDestroyObservationDelegate.vtable)
+}
+
+// FfiConverter protocol for callback interfaces
+private enum FfiConverterCallbackInterfaceYrsDestroyObservationDelegate {
+    fileprivate static var handleMap = UniffiHandleMap<YrsDestroyObservationDelegate>()
+}
+
+extension FfiConverterCallbackInterfaceYrsDestroyObservationDelegate: FfiConverter {
+    typealias SwiftType = YrsDestroyObservationDelegate
+    typealias FfiType = UInt64
+
+    public static func lift(_ handle: UInt64) throws -> SwiftType {
+        try handleMap.get(handle: handle)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func lower(_ v: SwiftType) -> UInt64 {
+        return handleMap.insert(obj: v)
+    }
+
+    public static func write(_ v: SwiftType, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(v))
+    }
+}
+
 public protocol YrsMapIteratorDelegate: AnyObject {
     func call(value: String)
 }
@@ -2468,6 +2803,81 @@ extension FfiConverterCallbackInterfaceYrsMapObservationDelegate: FfiConverter {
     }
 }
 
+/**
+ * Delegate for observing subdocument lifecycle changes.
+ */
+public protocol YrsSubdocsObservationDelegate: AnyObject {
+    func call(event: YrsSubdocsEvent)
+}
+
+// Put the implementation in a struct so we don't pollute the top-level namespace
+private enum UniffiCallbackInterfaceYrsSubdocsObservationDelegate {
+    // Create the VTable using a series of closures.
+    // Swift automatically converts these into C callback functions.
+    static var vtable: UniffiVTableCallbackInterfaceYrsSubdocsObservationDelegate = .init(
+        call: { (
+            uniffiHandle: UInt64,
+            event: RustBuffer,
+            _: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceYrsSubdocsObservationDelegate.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return try uniffiObj.call(
+                    event: FfiConverterTypeYrsSubdocsEvent.lift(event)
+                )
+            }
+
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        uniffiFree: { (uniffiHandle: UInt64) in
+            let result = try? FfiConverterCallbackInterfaceYrsSubdocsObservationDelegate.handleMap.remove(handle: uniffiHandle)
+            if result == nil {
+                print("Uniffi callback interface YrsSubdocsObservationDelegate: handle missing in uniffiFree")
+            }
+        }
+    )
+}
+
+private func uniffiCallbackInitYrsSubdocsObservationDelegate() {
+    uniffi_uniffi_yniffi_fn_init_callback_vtable_yrssubdocsobservationdelegate(&UniffiCallbackInterfaceYrsSubdocsObservationDelegate.vtable)
+}
+
+// FfiConverter protocol for callback interfaces
+private enum FfiConverterCallbackInterfaceYrsSubdocsObservationDelegate {
+    fileprivate static var handleMap = UniffiHandleMap<YrsSubdocsObservationDelegate>()
+}
+
+extension FfiConverterCallbackInterfaceYrsSubdocsObservationDelegate: FfiConverter {
+    typealias SwiftType = YrsSubdocsObservationDelegate
+    typealias FfiType = UInt64
+
+    public static func lift(_ handle: UInt64) throws -> SwiftType {
+        try handleMap.get(handle: handle)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func lower(_ v: SwiftType) -> UInt64 {
+        return handleMap.insert(obj: v)
+    }
+
+    public static func write(_ v: SwiftType, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(v))
+    }
+}
+
 public protocol YrsTextObservationDelegate: AnyObject {
     func call(value: [YrsDelta])
 }
@@ -2614,6 +3024,27 @@ extension FfiConverterCallbackInterfaceYrsUndoManagerObservationDelegate: FfiCon
     }
 }
 
+private struct FfiConverterOptionUInt64: FfiConverterRustBuffer {
+    typealias SwiftType = UInt64?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterUInt64.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterUInt64.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
 private struct FfiConverterOptionString: FfiConverterRustBuffer {
     typealias SwiftType = String?
 
@@ -2651,6 +3082,27 @@ private struct FfiConverterOptionTypeYrsArray: FfiConverterRustBuffer {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterTypeYrsArray.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+private struct FfiConverterOptionTypeYrsDoc: FfiConverterRustBuffer {
+    typealias SwiftType = YrsDoc?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeYrsDoc.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeYrsDoc.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -2758,6 +3210,28 @@ private struct FfiConverterSequenceString: FfiConverterRustBuffer {
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             try seq.append(FfiConverterString.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+private struct FfiConverterSequenceTypeYrsDoc: FfiConverterRustBuffer {
+    typealias SwiftType = [YrsDoc]
+
+    public static func write(_ value: [YrsDoc], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeYrsDoc.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [YrsDoc] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [YrsDoc]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            try seq.append(FfiConverterTypeYrsDoc.read(from: &buf))
         }
         return seq
     }
@@ -2935,7 +3409,13 @@ private var initializationResult: InitializationResult {
     if uniffi_uniffi_yniffi_checksum_method_yrsarray_get() != 63631 {
         return InitializationResult.apiChecksumMismatch
     }
+    if uniffi_uniffi_yniffi_checksum_method_yrsarray_get_doc() != 57586 {
+        return InitializationResult.apiChecksumMismatch
+    }
     if uniffi_uniffi_yniffi_checksum_method_yrsarray_insert() != 50029 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_uniffi_yniffi_checksum_method_yrsarray_insert_doc() != 14439 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_uniffi_yniffi_checksum_method_yrsarray_insert_range() != 7117 {
@@ -2965,6 +3445,15 @@ private var initializationResult: InitializationResult {
     if uniffi_uniffi_yniffi_checksum_method_yrsarray_to_a() != 10731 {
         return InitializationResult.apiChecksumMismatch
     }
+    if uniffi_uniffi_yniffi_checksum_method_yrsdoc_auto_load() != 54911 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_uniffi_yniffi_checksum_method_yrsdoc_client_id() != 24396 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_uniffi_yniffi_checksum_method_yrsdoc_destroy() != 36607 {
+        return InitializationResult.apiChecksumMismatch
+    }
     if uniffi_uniffi_yniffi_checksum_method_yrsdoc_encode_diff_v1() != 16238 {
         return InitializationResult.apiChecksumMismatch
     }
@@ -2975,6 +3464,27 @@ private var initializationResult: InitializationResult {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_uniffi_yniffi_checksum_method_yrsdoc_get_text() != 33749 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_uniffi_yniffi_checksum_method_yrsdoc_guid() != 57892 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_uniffi_yniffi_checksum_method_yrsdoc_load() != 26926 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_uniffi_yniffi_checksum_method_yrsdoc_observe_destroy() != 58314 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_uniffi_yniffi_checksum_method_yrsdoc_observe_subdocs() != 54204 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_uniffi_yniffi_checksum_method_yrsdoc_parent_doc() != 63464 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_uniffi_yniffi_checksum_method_yrsdoc_ptr_eq() != 54594 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_uniffi_yniffi_checksum_method_yrsdoc_should_load() != 55740 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_uniffi_yniffi_checksum_method_yrsdoc_transact() != 24297 {
@@ -2995,7 +3505,13 @@ private var initializationResult: InitializationResult {
     if uniffi_uniffi_yniffi_checksum_method_yrsmap_get() != 30941 {
         return InitializationResult.apiChecksumMismatch
     }
+    if uniffi_uniffi_yniffi_checksum_method_yrsmap_get_doc() != 37382 {
+        return InitializationResult.apiChecksumMismatch
+    }
     if uniffi_uniffi_yniffi_checksum_method_yrsmap_insert() != 48558 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_uniffi_yniffi_checksum_method_yrsmap_insert_doc() != 2165 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_uniffi_yniffi_checksum_method_yrsmap_keys() != 31471 {
@@ -3053,6 +3569,12 @@ private var initializationResult: InitializationResult {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_uniffi_yniffi_checksum_method_yrstransaction_origin() != 47344 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_uniffi_yniffi_checksum_method_yrstransaction_subdoc_guids() != 23509 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_uniffi_yniffi_checksum_method_yrstransaction_subdocs() != 22482 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_uniffi_yniffi_checksum_method_yrstransaction_transaction_apply_update() != 45997 {
@@ -3121,10 +3643,16 @@ private var initializationResult: InitializationResult {
     if uniffi_uniffi_yniffi_checksum_constructor_yrsdoc_new() != 51551 {
         return InitializationResult.apiChecksumMismatch
     }
+    if uniffi_uniffi_yniffi_checksum_constructor_yrsdoc_new_with_options() != 55796 {
+        return InitializationResult.apiChecksumMismatch
+    }
     if uniffi_uniffi_yniffi_checksum_method_yrsarrayeachdelegate_call() != 23816 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_uniffi_yniffi_checksum_method_yrsarrayobservationdelegate_call() != 34683 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_uniffi_yniffi_checksum_method_yrsdestroyobservationdelegate_call() != 16341 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_uniffi_yniffi_checksum_method_yrsmapiteratordelegate_call() != 18340 {
@@ -3136,6 +3664,9 @@ private var initializationResult: InitializationResult {
     if uniffi_uniffi_yniffi_checksum_method_yrsmapobservationdelegate_call() != 51216 {
         return InitializationResult.apiChecksumMismatch
     }
+    if uniffi_uniffi_yniffi_checksum_method_yrssubdocsobservationdelegate_call() != 32949 {
+        return InitializationResult.apiChecksumMismatch
+    }
     if uniffi_uniffi_yniffi_checksum_method_yrstextobservationdelegate_call() != 16633 {
         return InitializationResult.apiChecksumMismatch
     }
@@ -3145,9 +3676,11 @@ private var initializationResult: InitializationResult {
 
     uniffiCallbackInitYrsArrayEachDelegate()
     uniffiCallbackInitYrsArrayObservationDelegate()
+    uniffiCallbackInitYrsDestroyObservationDelegate()
     uniffiCallbackInitYrsMapIteratorDelegate()
     uniffiCallbackInitYrsMapKVIteratorDelegate()
     uniffiCallbackInitYrsMapObservationDelegate()
+    uniffiCallbackInitYrsSubdocsObservationDelegate()
     uniffiCallbackInitYrsTextObservationDelegate()
     uniffiCallbackInitYrsUndoManagerObservationDelegate()
     return InitializationResult.ok

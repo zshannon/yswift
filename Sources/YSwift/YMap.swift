@@ -321,3 +321,32 @@ extension YMapChange: Equatable where T: Equatable {
 }
 
 extension YMapChange: Hashable where T: Hashable {}
+
+// MARK: - Subdocument Support
+
+extension YMap {
+    /// Returns a subdocument for the specified key.
+    /// - Parameters:
+    ///   - key: The key that identifies the subdocument.
+    ///   - transaction: An optional transaction to use.
+    /// - Returns: The subdocument for the specified key, or nil if no subdocument exists for that key.
+    public func getSubdoc(forKey key: String, transaction: YrsTransaction? = nil) -> YDocument? {
+        withTransaction(transaction) { txn in
+            self._map.getDoc(tx: txn, key: key).map { YDocument(wrapping: $0) }
+        }
+    }
+
+    /// Inserts a subdocument for the specified key.
+    /// - Parameters:
+    ///   - subdoc: The subdocument to insert.
+    ///   - key: The key to associate with the subdocument.
+    ///   - transaction: An optional transaction to use.
+    /// - Returns: The integrated subdocument (may be different from the input if the document was already integrated).
+    @discardableResult
+    public func insertSubdoc(_ subdoc: YDocument, forKey key: String, transaction: YrsTransaction? = nil) -> YDocument {
+        withTransaction(transaction) { txn in
+            let inserted = self._map.insertDoc(tx: txn, key: key, doc: subdoc.document)
+            return YDocument(wrapping: inserted)
+        }
+    }
+}

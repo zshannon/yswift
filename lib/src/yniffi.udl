@@ -6,15 +6,60 @@ enum CodingError {
   "DecodingError",
 };
 
+/// Options for creating a YrsDoc with specific configuration.
+dictionary YrsDocOptions {
+    boolean auto_load;
+    u64? client_id;
+    string? guid;
+    boolean should_load;
+};
+
+/// Event emitted when subdocuments are added, loaded, or removed.
+dictionary YrsSubdocsEvent {
+    sequence<YrsDoc> added;
+    sequence<YrsDoc> loaded;
+    sequence<YrsDoc> removed;
+};
+
+/// Delegate for observing document destruction.
+callback interface YrsDestroyObservationDelegate {
+    void call();
+};
+
+/// Delegate for observing subdocument lifecycle changes.
+callback interface YrsSubdocsObservationDelegate {
+    void call(YrsSubdocsEvent event);
+};
+
 interface YrsDoc {
   constructor();
 
+  [Name=new_with_options]
+  constructor(YrsDocOptions options);
+
+  // Identity properties
+  boolean auto_load();
+  u64 client_id();
+  string guid();
+  boolean should_load();
+
+  // Subdoc lifecycle
+  void destroy([ByRef] YrsTransaction parent_txn);
+  void load([ByRef] YrsTransaction parent_txn);
+  YrsDoc? parent_doc();
+  boolean ptr_eq([ByRef] YrsDoc other);
+
+  // Observation
+  YSubscription observe_destroy(YrsDestroyObservationDelegate delegate);
+  YSubscription observe_subdocs(YrsSubdocsObservationDelegate delegate);
+
+  // Existing methods
   [Throws=CodingError]
   sequence<u8> encode_diff_v1([ByRef] YrsTransaction tx, sequence<u8> state_vector);
-  
-  YrsText get_text(string name);
+
   YrsArray get_array(string name);
   YrsMap get_map(string name);
+  YrsText get_text(string name);
   YrsTransaction transact(YrsOrigin? origin);
   YrsUndoManager undo_manager(sequence<YrsCollectionPtr> tracked_refs);
 };
@@ -34,6 +79,10 @@ interface YrsTransaction {
   YrsMap? transaction_get_map(string name);
   YrsOrigin? origin();
   void free();
+
+  // Subdoc methods
+  sequence<string> subdoc_guids();
+  sequence<YrsDoc> subdocs();
 };
 
 [Custom]
@@ -53,7 +102,7 @@ interface YrsMap {
 
   [Throws=CodingError]
   string get([ByRef] YrsTransaction tx, string key);
-  
+
   [Throws=CodingError]
   string? remove([ByRef] YrsTransaction tx, string key);
   void clear([ByRef] YrsTransaction tx);
@@ -62,6 +111,10 @@ interface YrsMap {
   void each([ByRef] YrsTransaction tx, YrsMapKVIteratorDelegate delegate);
 
   YSubscription observe(YrsMapObservationDelegate delegate);
+
+  // Subdoc methods
+  YrsDoc? get_doc([ByRef] YrsTransaction tx, string key);
+  YrsDoc insert_doc([ByRef] YrsTransaction tx, string key, [ByRef] YrsDoc doc);
 };
 
 [Enum]
@@ -103,6 +156,10 @@ interface YrsArray {
   void remove_range([ByRef] YrsTransaction tx, u32 index, u32 len);
   sequence<string> to_a([ByRef] YrsTransaction tx);
   YSubscription observe(YrsArrayObservationDelegate delegate);
+
+  // Subdoc methods
+  YrsDoc? get_doc([ByRef] YrsTransaction tx, u32 index);
+  YrsDoc insert_doc([ByRef] YrsTransaction tx, u32 index, [ByRef] YrsDoc doc);
 };
 
 callback interface YrsArrayEachDelegate {

@@ -1,4 +1,5 @@
 use crate::array::YrsArray;
+use crate::doc::{YrsDoc, YrsOrigin};
 use crate::error::CodingError;
 use crate::map::YrsMap;
 use crate::text::YrsText;
@@ -10,7 +11,6 @@ use yrs::{
     Update,
 };
 use yrs::{Store, WriteTxn};
-use crate::doc::YrsOrigin;
 
 pub(crate) struct YrsTransaction(pub(crate) RefCell<Option<TransactionMut<'static>>>);
 
@@ -79,7 +79,13 @@ impl YrsTransaction {
     pub(crate) fn transaction_apply_update(&self, update: Vec<u8>) -> Result<(), CodingError> {
         Update::decode_v1(update.as_slice())
             .map_err(|_e| CodingError::DecodingError)
-            .map(|u| self.transaction().as_mut().unwrap().apply_update(u))
+            .and_then(|u| {
+                self.transaction()
+                    .as_mut()
+                    .unwrap()
+                    .apply_update(u)
+                    .map_err(|_| CodingError::DecodingError)
+            })
     }
 
     pub(crate) fn transaction_get_text(&self, name: String) -> Option<Arc<YrsText>> {
@@ -108,6 +114,28 @@ impl YrsTransaction {
             .map(YrsMap::from)
             // ^^ this is reporting as return Option<{unknown}> instead of Option<YrsMap>, and I'm not sure why...
             .map(Arc::from)
+    }
+
+    // MARK: - Subdoc methods
+
+    /// Returns GUIDs of all subdocuments in this document.
+    pub(crate) fn subdoc_guids(&self) -> Vec<String> {
+        self.transaction()
+            .as_ref()
+            .map(|txn| txn.subdoc_guids().map(|g| g.to_string()).collect())
+            .unwrap_or_default()
+    }
+
+    /// Returns all subdocuments in this document.
+    pub(crate) fn subdocs(&self) -> Vec<Arc<YrsDoc>> {
+        self.transaction()
+            .as_ref()
+            .map(|txn| {
+                txn.subdocs()
+                    .map(|d| Arc::new(YrsDoc::from_doc(d.clone())))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     pub(crate) fn free(&self) {

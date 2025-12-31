@@ -1,3 +1,4 @@
+use crate::doc::{YrsCollectionPtr, YrsDoc};
 use crate::error::CodingError;
 use crate::mapchange::{YrsEntryChange, YrsMapChange};
 use crate::subscription::YSubscription;
@@ -6,9 +7,7 @@ use std::cell::RefCell;
 use std::fmt::Debug;
 use std::sync::Arc;
 use yrs::branch::Branch;
-use yrs::Observable;
-use yrs::{types::Value, Any, Map, MapRef};
-use crate::doc::YrsCollectionPtr;
+use yrs::{Any, Map, MapRef, Observable, Out};
 
 pub(crate) struct YrsMap(RefCell<MapRef>);
 
@@ -127,7 +126,7 @@ impl YrsMap {
         let map = self.0.borrow();
         let v = map.get(tx, key.as_str()).unwrap();
         let mut buf = String::new();
-        if let Value::Any(any) = v {
+        if let Out::Any(any) = v {
             any.to_json(&mut buf);
             Ok(buf)
         } else {
@@ -152,7 +151,7 @@ impl YrsMap {
             // there was some kind of value in the map, try to cast it and convert
             // to JSON
             Some(v) => {
-                if let Value::Any(any) = v {
+                if let Out::Any(any) = v {
                     let mut buf = String::new();
                     any.to_json(&mut buf);
                     return Ok(Some(buf));
@@ -229,7 +228,7 @@ impl YrsMap {
             // In practice, it appears to contains a single value for this usage of it.
             value_list.iter().for_each(|val_in_list| {
                 let mut buf = String::new();
-                if let Value::Any(any) = val_in_list {
+                if let Out::Any(any) = val_in_list {
                     any.to_json(&mut buf);
                     delegate.call(buf);
                 } else {
@@ -261,7 +260,7 @@ impl YrsMap {
             // but do the extra work to convert Value to a JSON string for decoding
             // on the far side of the language binding - or at least try to.
             let mut buf = String::new();
-            if let Value::Any(any) = key_value_pair.1 {
+            if let Out::Any(any) = key_value_pair.1 {
                 any.to_json(&mut buf);
                 delegate.call(key_value_pair.0.to_string(), buf);
             } else {
@@ -288,6 +287,44 @@ impl YrsMap {
             });
 
             Arc::new(YSubscription::new(subscription))
+    }
+
+    // MARK: - Subdoc methods
+
+    /// Gets a subdocument for the specified key.
+    /// Returns None if the key doesn't exist or the value is not a document.
+    pub(crate) fn get_doc(
+        &self,
+        transaction: &YrsTransaction,
+        key: String,
+    ) -> Option<Arc<YrsDoc>> {
+        let binding = transaction.transaction();
+        let tx = binding.as_ref().unwrap();
+        let map = self.0.borrow();
+
+        if let Some(Out::YDoc(doc)) = map.get(tx, key.as_str()) {
+            Some(Arc::new(YrsDoc::from_doc(doc)))
+        } else {
+            None
+        }
+    }
+
+    /// Inserts a subdocument with the specified key.
+    /// Returns a reference to the integrated subdocument.
+    pub(crate) fn insert_doc(
+        &self,
+        transaction: &YrsTransaction,
+        key: String,
+        doc: &YrsDoc,
+    ) -> Arc<YrsDoc> {
+        let mut binding = transaction.transaction();
+        let tx = binding.as_mut().unwrap();
+        let map = self.0.borrow_mut();
+
+        // Clone the inner Doc and insert it
+        let inner_doc = doc.inner().clone();
+        let inserted = map.insert(tx, key, inner_doc);
+        Arc::new(YrsDoc::from_doc(inserted))
     }
 }
 

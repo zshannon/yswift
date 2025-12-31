@@ -1,4 +1,5 @@
-use yrs::types::{Change, Value};
+use yrs::types::Change;
+use yrs::Out;
 
 pub enum YrsChange {
     Added { elements: Vec<String> },
@@ -17,7 +18,7 @@ impl From<&Change> for YrsChange {
                 let mut res = Vec::new();
                 added.iter().for_each(|v| {
                     let mut buf = String::new();
-                    if let Value::Any(any) = v {
+                    if let Out::Any(any) = v {
                         any.to_json(&mut buf);
                         res.push(buf);
                     }

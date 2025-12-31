@@ -227,4 +227,35 @@ public final class YDocument {
         let mapped = trackedRefs.map { $0.pointer() }
         return YUndoManager(manager: document.undoManager(trackedRefs: mapped))
     }
+
+    // MARK: - JSON Path Queries
+
+    /// Queries the document using JSON path syntax.
+    ///
+    /// JSON path allows you to query nested document structures. Examples:
+    /// - `$.users` - Get the "users" root-level collection
+    /// - `$.users[0]` - Get the first user
+    /// - `$.users[*].name` - Get all user names
+    /// - `$..name` - Recursively find all "name" fields
+    ///
+    /// - Parameters:
+    ///   - path: A JSON path expression (e.g., "$.users[*].name")
+    ///   - transaction: An optional transaction to use. If not provided, a new one is created.
+    /// - Returns: An array of JSON-encoded strings representing matching values.
+    /// - Throws: `YrsJsonPathError` if the path expression is invalid.
+    public func query(_ path: String, transaction: YrsTransaction? = nil) throws -> [String] {
+        if let transaction = transaction {
+            return try transaction.jsonPath(path: path)
+        } else {
+            var result: Result<[String], Error>?
+            transactSync { txn in
+                do {
+                    result = .success(try txn.jsonPath(path: path))
+                } catch {
+                    result = .failure(error)
+                }
+            }
+            return try result!.get()
+        }
+    }
 }

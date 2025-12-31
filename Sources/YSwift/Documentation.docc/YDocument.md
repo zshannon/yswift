@@ -59,3 +59,61 @@ For a more detailed example of synchronizing a document, see <doc:SynchronizingD
 ### Undo and Redo
 
 - ``YSwift/YDocument/undoManager(trackedRefs:)``
+
+### Subdocuments
+
+Subdocuments allow you to nest documents within arrays or maps. This enables lazy loading of document sections and more granular synchronization.
+
+```swift
+let parentDoc = YDocument()
+let subdoc = YDocument(options: YDocumentOptions(guid: "child-doc"))
+let array: YArray<String> = parentDoc.getOrCreateArray(named: "docs")
+
+// Insert subdoc into parent
+parentDoc.transactSync { txn in
+    array.insertSubdoc(at: 0, subdoc, transaction: txn)
+}
+
+// Retrieve subdoc
+let retrieved = array.getSubdoc(at: 0)
+```
+
+- ``YSwift/YDocument/init(options:)``
+- ``YSwift/YDocumentOptions``
+- ``YSwift/YDocument/guid``
+- ``YSwift/YDocument/clientId``
+- ``YSwift/YDocument/autoLoad``
+- ``YSwift/YDocument/shouldLoad``
+- ``YSwift/YDocument/parentDocument``
+- ``YSwift/YDocument/isSame(as:)``
+- ``YSwift/YDocument/subdocs(transaction:)``
+- ``YSwift/YDocument/subdocGuids(transaction:)``
+- ``YSwift/YDocument/load(in:)``
+- ``YSwift/YDocument/destroy(in:)``
+- ``YSwift/YDocument/observeSubdocs(_:)-31inz``
+- ``YSwift/YDocument/observeDestroy(_:)-4ditl``
+
+### JSON Path Queries
+
+Query nested document structures using JSON path syntax:
+
+```swift
+let doc = YDocument()
+let users: YArray<String> = doc.getOrCreateArray(named: "users")
+doc.transactSync { txn in
+    users.append("{\"name\":\"Alice\"}", transaction: txn)
+    users.append("{\"name\":\"Bob\"}", transaction: txn)
+}
+
+// Query all users
+let results = try doc.query("$.users[*]")
+
+// Supported syntax:
+// $.field      - Access field
+// $[0]         - Array index
+// $[*]         - All array elements
+// $..field     - Recursive descent
+// $[1:3]       - Array slice
+```
+
+- ``YSwift/YDocument/query(_:transaction:)``

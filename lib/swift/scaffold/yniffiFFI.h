@@ -732,6 +732,11 @@ void uniffi_uniffi_yniffi_fn_free_yrstransaction(void*_Nonnull ptr, RustCallStat
 void uniffi_uniffi_yniffi_fn_method_yrstransaction_free(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_UNIFFI_YNIFFI_FN_METHOD_YRSTRANSACTION_JSON_PATH
+#define UNIFFI_FFIDEF_UNIFFI_UNIFFI_YNIFFI_FN_METHOD_YRSTRANSACTION_JSON_PATH
+RustBuffer uniffi_uniffi_yniffi_fn_method_yrstransaction_json_path(void*_Nonnull ptr, RustBuffer path, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_UNIFFI_YNIFFI_FN_METHOD_YRSTRANSACTION_ORIGIN
 #define UNIFFI_FFIDEF_UNIFFI_UNIFFI_YNIFFI_FN_METHOD_YRSTRANSACTION_ORIGIN
 RustBuffer uniffi_uniffi_yniffi_fn_method_yrstransaction_origin(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
@@ -1524,6 +1529,12 @@ uint16_t uniffi_uniffi_yniffi_checksum_method_yrstext_remove_range(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_UNIFFI_YNIFFI_CHECKSUM_METHOD_YRSTRANSACTION_FREE
 #define UNIFFI_FFIDEF_UNIFFI_UNIFFI_YNIFFI_CHECKSUM_METHOD_YRSTRANSACTION_FREE
 uint16_t uniffi_uniffi_yniffi_checksum_method_yrstransaction_free(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_UNIFFI_YNIFFI_CHECKSUM_METHOD_YRSTRANSACTION_JSON_PATH
+#define UNIFFI_FFIDEF_UNIFFI_UNIFFI_YNIFFI_CHECKSUM_METHOD_YRSTRANSACTION_JSON_PATH
+uint16_t uniffi_uniffi_yniffi_checksum_method_yrstransaction_json_path(void
     
 );
 #endif

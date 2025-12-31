@@ -6,6 +6,11 @@ enum CodingError {
   "DecodingError",
 };
 
+[Error]
+enum YrsJsonPathError {
+  "ParseError",
+};
+
 /// Options for creating a YrsDoc with specific configuration.
 dictionary YrsDocOptions {
     boolean auto_load;
@@ -83,6 +88,10 @@ interface YrsTransaction {
   // Subdoc methods
   sequence<string> subdoc_guids();
   sequence<YrsDoc> subdocs();
+
+  // JSON path query
+  [Throws=YrsJsonPathError]
+  sequence<string> json_path(string path);
 };
 
 [Custom]

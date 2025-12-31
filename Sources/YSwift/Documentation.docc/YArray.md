@@ -31,3 +31,8 @@
 - ``YSwift/YArray/observe(_:)``
 - ``YSwift/YArray/unobserve(_:)``
 - ``YSwift/YArrayChange``
+
+### Subdocuments
+
+- ``YSwift/YArray/getSubdoc(at:transaction:)``
+- ``YSwift/YArray/insertSubdoc(at:_:transaction:)``

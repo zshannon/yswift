@@ -1400,6 +1400,8 @@ public func FfiConverterTypeYrsText_lower(_ value: YrsText) -> UnsafeMutableRawP
 public protocol YrsTransactionProtocol: AnyObject {
     func free()
 
+    func jsonPath(path: String) throws -> [String]
+
     func origin() -> YrsOrigin?
 
     func subdocGuids() -> [String]
@@ -1466,6 +1468,13 @@ open class YrsTransaction:
     open func free() { try! rustCall {
         uniffi_uniffi_yniffi_fn_method_yrstransaction_free(self.uniffiClonePointer(), $0)
     }
+    }
+
+    open func jsonPath(path: String) throws -> [String] {
+        return try FfiConverterSequenceString.lift(rustCallWithError(FfiConverterTypeYrsJsonPathError.lift) {
+            uniffi_uniffi_yniffi_fn_method_yrstransaction_json_path(self.uniffiClonePointer(),
+                                                                    FfiConverterString.lower(path), $0)
+        })
     }
 
     open func origin() -> YrsOrigin? {
@@ -2286,6 +2295,36 @@ public func FfiConverterTypeYrsEntryChange_lower(_ value: YrsEntryChange) -> Rus
 }
 
 extension YrsEntryChange: Equatable, Hashable {}
+
+public enum YrsJsonPathError {
+    case ParseError(message: String)
+}
+
+public struct FfiConverterTypeYrsJsonPathError: FfiConverterRustBuffer {
+    typealias SwiftType = YrsJsonPathError
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> YrsJsonPathError {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        case 1: return try .ParseError(
+                message: FfiConverterString.read(from: &buf)
+            )
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: YrsJsonPathError, into buf: inout [UInt8]) {
+        switch value {
+        case .ParseError(_ /* message is ignored*/ ):
+            writeInt(&buf, Int32(1))
+        }
+    }
+}
+
+extension YrsJsonPathError: Equatable, Hashable {}
+
+extension YrsJsonPathError: Error {}
 
 public enum YrsUndoError {
     case PendingTransaction(message: String)
@@ -3566,6 +3605,9 @@ private var initializationResult: InitializationResult {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_uniffi_yniffi_checksum_method_yrstransaction_free() != 42613 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_uniffi_yniffi_checksum_method_yrstransaction_json_path() != 57602 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_uniffi_yniffi_checksum_method_yrstransaction_origin() != 47344 {

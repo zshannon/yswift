@@ -32,3 +32,8 @@
 - ``YSwift/YMap/keys(transaction:_:)``
 - ``YSwift/YMap/values(transaction:_:)``
 - ``YSwift/YMap/YMapIterator``
+
+### Subdocuments
+
+- ``YSwift/YMap/getSubdoc(forKey:transaction:)``
+- ``YSwift/YMap/insertSubdoc(_:forKey:transaction:)``

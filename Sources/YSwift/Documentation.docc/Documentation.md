@@ -15,9 +15,14 @@ YSwift is a Swift language overlay of the Rust library [Yrs](https://docs.rs/yrs
 ### Documents
 
 - ``YSwift/YDocument``
+- ``YSwift/YDocumentOptions``
 - ``YSwift/Buffer``
 - <doc:SynchronizingDocuments>
 - <doc:ImplementationNotes>
+
+### Subdocuments
+
+- ``YSwift/YSubdocsEvent``
 
 ### Arrays
 

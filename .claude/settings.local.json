@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find:*)",
+      "Bash(cargo build:*)",
+      "WebSearch",
+      "WebFetch(domain:docs.rs)",
+      "Bash(cargo search:*)",
+      "Bash(rustup update:*)",
+      "Bash(cargo run:*)",
+      "Bash(./scripts/build-xcframework.sh:*)",
+      "Bash(rustc:*)",
+      "Bash(source \"$HOME/.cargo/env\")",
+      "Bash(YSWIFT_LOCAL=true swift test:*)"
+    ],
+    "additionalDirectories": [
+      "/Users/zcs/Code/zshannon/2025/y-crdt"
+    ]
+  }
+}

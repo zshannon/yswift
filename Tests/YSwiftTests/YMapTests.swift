@@ -283,4 +283,165 @@ final class YMapTests: XCTestCase {
         object = NSObject()
         XCTAssertNil(weakObject)
     }
+
+    // MARK: - Nested Shared Type Tests
+
+    func test_getNestedText_returnsNilForJsonValue() {
+        let root: YMap<String> = document.getOrCreateMap(named: "root")
+        root["name"] = "hello"
+        XCTAssertNil(root.getText(forKey: "name"))
+        XCTAssertNil(root.getText(forKey: "nonexistent"))
+    }
+
+    func test_getNestedArray_returnsNilForJsonValue() {
+        let root: YMap<[Int]> = document.getOrCreateMap(named: "root")
+        root["numbers"] = [1, 2, 3]
+        let arr: YArray<Int>? = root.getArray(forKey: "numbers")
+        XCTAssertNil(arr)
+    }
+
+    func test_getNestedMap_returnsNilForJsonValue() {
+        let root: YMap<String> = document.getOrCreateMap(named: "root")
+        root["key"] = "value"
+        let nested: YMap<String>? = root.getMap(forKey: "key")
+        XCTAssertNil(nested)
+    }
+
+    func test_isUndefined() {
+        let root: YMap<String> = document.getOrCreateMap(named: "root")
+        XCTAssertFalse(root.isUndefined(forKey: "nonexistent"))
+        root["name"] = "test"
+        XCTAssertFalse(root.isUndefined(forKey: "name"))
+    }
+
+    // MARK: - Insert and Retrieve Nested Types
+
+    func test_insertAndGetNestedMap() {
+        let root: YMap<String> = document.getOrCreateMap(named: "root")
+
+        // Insert a nested map
+        let nested: YMap<String> = root.insertMap(forKey: "state")
+        nested["foo"] = "bar"
+
+        // Retrieve it and verify
+        let retrieved: YMap<String>? = root.getMap(forKey: "state")
+        XCTAssertNotNil(retrieved)
+        XCTAssertEqual(retrieved?["foo"], "bar")
+    }
+
+    func test_insertAndGetNestedArray() {
+        let root: YMap<String> = document.getOrCreateMap(named: "root")
+
+        // Insert a nested array
+        let nested: YArray<Int> = root.insertArray(forKey: "numbers")
+        nested.append(1)
+        nested.append(2)
+        nested.append(3)
+
+        // Retrieve it and verify
+        let retrieved: YArray<Int>? = root.getArray(forKey: "numbers")
+        XCTAssertNotNil(retrieved)
+        XCTAssertEqual(retrieved?.toArray(), [1, 2, 3])
+    }
+
+    func test_insertAndGetNestedText() {
+        let root: YMap<String> = document.getOrCreateMap(named: "root")
+
+        // Insert a nested text
+        let nested = root.insertText(forKey: "content")
+        nested.append("Hello, World!")
+
+        // Retrieve it and verify
+        let retrieved = root.getText(forKey: "content")
+        XCTAssertNotNil(retrieved)
+        XCTAssertEqual(retrieved?.getString(), "Hello, World!")
+    }
+
+    func test_getOrInsertMap() {
+        let root: YMap<String> = document.getOrCreateMap(named: "root")
+
+        // First call creates the map
+        let first: YMap<String> = root.getOrInsertMap(forKey: "state")
+        first["key1"] = "value1"
+
+        // Second call retrieves same map
+        let second: YMap<String> = root.getOrInsertMap(forKey: "state")
+        XCTAssertEqual(second["key1"], "value1")
+
+        // Modifications to second affect first (same map)
+        second["key2"] = "value2"
+        XCTAssertEqual(first["key2"], "value2")
+    }
+
+    func test_getOrInsertArray() {
+        let root: YMap<String> = document.getOrCreateMap(named: "root")
+
+        // First call creates the array
+        let first: YArray<Int> = root.getOrInsertArray(forKey: "items")
+        first.append(1)
+
+        // Second call retrieves same array
+        let second: YArray<Int> = root.getOrInsertArray(forKey: "items")
+        XCTAssertEqual(second.toArray(), [1])
+
+        // Modifications to second affect first (same array)
+        second.append(2)
+        XCTAssertEqual(first.toArray(), [1, 2])
+    }
+
+    func test_getOrInsertText() {
+        let root: YMap<String> = document.getOrCreateMap(named: "root")
+
+        // First call creates the text
+        let first = root.getOrInsertText(forKey: "content")
+        first.append("Hello")
+
+        // Second call retrieves same text
+        let second = root.getOrInsertText(forKey: "content")
+        XCTAssertEqual(second.getString(), "Hello")
+
+        // Modifications to second affect first (same text)
+        second.append(" World")
+        XCTAssertEqual(first.getString(), "Hello World")
+    }
+
+    func test_tryUpdate_existingKey() {
+        let root: YMap<String> = document.getOrCreateMap(named: "root")
+        root["existing"] = "oldValue"
+
+        let updated = root.tryUpdate("newValue", forKey: "existing")
+        XCTAssertTrue(updated)
+        XCTAssertEqual(root["existing"], "newValue")
+    }
+
+    func test_tryUpdate_nonExistentKey() {
+        let root: YMap<String> = document.getOrCreateMap(named: "root")
+
+        // Note: try_update in yrs actually inserts the value even for non-existent keys
+        // and returns true. This is the actual behavior.
+        let updated = root.tryUpdate("value", forKey: "nonexistent")
+        XCTAssertTrue(updated)
+        XCTAssertEqual(root["nonexistent"], "value")
+    }
+
+    func test_deeplyNestedStructure() {
+        let root: YMap<String> = document.getOrCreateMap(named: "root")
+
+        // Create nested structure: root -> level1 (map) -> level2 (map) -> content (text)
+        let level1: YMap<String> = root.insertMap(forKey: "level1")
+        let level2: YMap<String> = level1.insertMap(forKey: "level2")
+        let content = level2.insertText(forKey: "content")
+        content.append("Deep value")
+
+        // Retrieve through the chain
+        let retrievedL1: YMap<String>? = root.getMap(forKey: "level1")
+        XCTAssertNotNil(retrievedL1)
+
+        let retrievedL2: YMap<String>? = retrievedL1?.getMap(forKey: "level2")
+        XCTAssertNotNil(retrievedL2)
+
+        let retrievedContent = retrievedL2?.getText(forKey: "content")
+        XCTAssertNotNil(retrievedContent)
+        XCTAssertEqual(retrievedContent?.getString(), "Deep value")
+    }
 }

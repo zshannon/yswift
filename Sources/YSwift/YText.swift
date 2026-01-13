@@ -199,6 +199,46 @@ public final class YText: Transactable, YCollection {
     public func pointer() -> YrsCollectionPtr {
         return _text.rawPtr()
     }
+
+    // MARK: - Delta Operations
+
+    /// Applies a delta to the text.
+    /// - Parameters:
+    ///   - delta: An array of text changes to apply.
+    ///   - transaction: An optional transaction to use.
+    public func applyDelta(_ delta: [YTextChange], in transaction: YrsTransaction? = nil) {
+        let yrsDelta: [YrsDelta] = delta.map { change in
+            switch change {
+            case let .inserted(value, attributes):
+                return YrsDelta.inserted(value: value, attrs: Coder.encoded(attributes))
+            case let .deleted(index):
+                return YrsDelta.deleted(index: index)
+            case let .retained(index, attributes):
+                return YrsDelta.retained(index: index, attrs: Coder.encoded(attributes))
+            }
+        }
+        withTransaction(transaction) { txn in
+            self._text.applyDelta(tx: txn, delta: yrsDelta)
+        }
+    }
+
+    /// Returns the text content as a list of diff chunks with formatting.
+    /// - Parameter transaction: An optional transaction to use.
+    /// - Returns: An array of text diff chunks.
+    public func diff(in transaction: YrsTransaction? = nil) -> [YTextDiff] {
+        withTransaction(transaction) { txn in
+            self._text.diff(tx: txn).map { yrsDiff in
+                switch yrsDiff {
+                case let .text(value, attrs):
+                    return YTextDiff.text(value: value, attributes: Coder.decoded(attrs))
+                case let .embed(value, attrs):
+                    return YTextDiff.embed(value: value, attributes: Coder.decoded(attrs))
+                case let .other(attrs):
+                    return YTextDiff.other(attributes: Coder.decoded(attrs))
+                }
+            }
+        }
+    }
 }
 
 extension YText: Equatable {
@@ -260,4 +300,14 @@ public enum YTextChange {
     case deleted(index: UInt32)
     /// Updated character position and any associated attributes.
     case retained(index: UInt32, attributes: [String: Any])
+}
+
+/// A diff chunk from the text with formatting information.
+public enum YTextDiff {
+    /// A text chunk with optional attributes.
+    case text(value: String, attributes: [String: Any])
+    /// An embedded object with optional attributes.
+    case embed(value: String, attributes: [String: Any])
+    /// Other content with optional attributes.
+    case other(attributes: [String: Any])
 }

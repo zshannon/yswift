@@ -315,3 +315,97 @@ extension YArray {
         }
     }
 }
+
+// MARK: - Nested Shared Type Support
+
+extension YArray {
+    /// Returns a nested YMap at the specified index.
+    public func getMap<U: Codable>(at index: Int, transaction: YrsTransaction? = nil) -> YMap<U>? {
+        withTransaction(transaction) { txn in
+            self._array.getMap(tx: txn, index: UInt32(index)).map { YMap<U>(map: $0, document: self.document) }
+        }
+    }
+
+    /// Returns a nested YArray at the specified index.
+    public func getArray<U: Codable>(at index: Int, transaction: YrsTransaction? = nil) -> YArray<U>? {
+        withTransaction(transaction) { txn in
+            self._array.getArray(tx: txn, index: UInt32(index)).map { YArray<U>(array: $0, document: self.document) }
+        }
+    }
+
+    /// Returns a nested YText at the specified index.
+    public func getText(at index: Int, transaction: YrsTransaction? = nil) -> YText? {
+        withTransaction(transaction) { txn in
+            self._array.getText(tx: txn, index: UInt32(index)).map { YText(text: $0, document: self.document) }
+        }
+    }
+
+    /// Checks if value at index is an undefined reference.
+    public func isUndefined(at index: Int, transaction: YrsTransaction? = nil) -> Bool {
+        withTransaction(transaction) { txn in
+            self._array.isUndefined(tx: txn, index: UInt32(index))
+        }
+    }
+
+    /// Inserts an empty nested YMap at the specified index.
+    @discardableResult
+    public func insertMap<U: Codable>(at index: Int, transaction: YrsTransaction? = nil) -> YMap<U> {
+        withTransaction(transaction) { txn in
+            YMap<U>(map: self._array.insertMap(tx: txn, index: UInt32(index)), document: self.document)
+        }
+    }
+
+    /// Inserts an empty nested YArray at the specified index.
+    @discardableResult
+    public func insertArray<U: Codable>(at index: Int, transaction: YrsTransaction? = nil) -> YArray<U> {
+        withTransaction(transaction) { txn in
+            YArray<U>(array: self._array.insertArray(tx: txn, index: UInt32(index)), document: self.document)
+        }
+    }
+
+    /// Inserts an empty nested YText at the specified index.
+    @discardableResult
+    public func insertText(at index: Int, transaction: YrsTransaction? = nil) -> YText {
+        withTransaction(transaction) { txn in
+            YText(text: self._array.insertText(tx: txn, index: UInt32(index)), document: self.document)
+        }
+    }
+
+    /// Pushes an empty nested YMap to the end of the array.
+    @discardableResult
+    public func pushMap<U: Codable>(transaction: YrsTransaction? = nil) -> YMap<U> {
+        withTransaction(transaction) { txn in
+            YMap<U>(map: self._array.pushMap(tx: txn), document: self.document)
+        }
+    }
+
+    /// Pushes an empty nested YArray to the end of the array.
+    @discardableResult
+    public func pushArray<U: Codable>(transaction: YrsTransaction? = nil) -> YArray<U> {
+        withTransaction(transaction) { txn in
+            YArray<U>(array: self._array.pushArray(tx: txn), document: self.document)
+        }
+    }
+
+    /// Pushes an empty nested YText to the end of the array.
+    @discardableResult
+    public func pushText(transaction: YrsTransaction? = nil) -> YText {
+        withTransaction(transaction) { txn in
+            YText(text: self._array.pushText(tx: txn), document: self.document)
+        }
+    }
+
+    /// Moves element from source index to target index.
+    public func move(from source: Int, to target: Int, transaction: YrsTransaction? = nil) {
+        withTransaction(transaction) { txn in
+            self._array.moveTo(tx: txn, source: UInt32(source), target: UInt32(target))
+        }
+    }
+
+    /// Moves range of elements to target index.
+    public func moveRange(from start: Int, to end: Int, target: Int, transaction: YrsTransaction? = nil) {
+        withTransaction(transaction) { txn in
+            self._array.moveRangeTo(tx: txn, start: UInt32(start), end: UInt32(end), target: UInt32(target))
+        }
+    }
+}

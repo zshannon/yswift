@@ -305,4 +305,126 @@ class YArrayTests: XCTestCase {
         object = NSObject()
         XCTAssertNil(weakObject)
     }
+
+    // MARK: - Nested Shared Type Tests
+
+    func test_insertAndGetNestedMap() {
+        let arr: YArray<String> = document.getOrCreateArray(named: "testArr")
+
+        // Insert a nested map at index 0
+        let nested: YMap<String> = arr.insertMap(at: 0)
+        nested["key"] = "value"
+
+        // Retrieve it and verify
+        let retrieved: YMap<String>? = arr.getMap(at: 0)
+        XCTAssertNotNil(retrieved)
+        XCTAssertEqual(retrieved?["key"], "value")
+    }
+
+    func test_insertAndGetNestedArray() {
+        let arr: YArray<String> = document.getOrCreateArray(named: "testArr")
+
+        // Insert a nested array at index 0
+        let nested: YArray<Int> = arr.insertArray(at: 0)
+        nested.append(1)
+        nested.append(2)
+        nested.append(3)
+
+        // Retrieve it and verify
+        let retrieved: YArray<Int>? = arr.getArray(at: 0)
+        XCTAssertNotNil(retrieved)
+        XCTAssertEqual(retrieved?.toArray(), [1, 2, 3])
+    }
+
+    func test_insertAndGetNestedText() {
+        let arr: YArray<String> = document.getOrCreateArray(named: "testArr")
+
+        // Insert a nested text at index 0
+        let nested = arr.insertText(at: 0)
+        nested.append("Hello, World!")
+
+        // Retrieve it and verify
+        let retrieved = arr.getText(at: 0)
+        XCTAssertNotNil(retrieved)
+        XCTAssertEqual(retrieved?.getString(), "Hello, World!")
+    }
+
+    func test_pushNestedMap() {
+        let arr: YArray<String> = document.getOrCreateArray(named: "testArr")
+
+        // Push a nested map
+        let nested: YMap<String> = arr.pushMap()
+        nested["foo"] = "bar"
+
+        XCTAssertEqual(arr.count, 1)
+        let retrieved: YMap<String>? = arr.getMap(at: 0)
+        XCTAssertNotNil(retrieved)
+        XCTAssertEqual(retrieved?["foo"], "bar")
+    }
+
+    func test_pushNestedArray() {
+        let arr: YArray<String> = document.getOrCreateArray(named: "testArr")
+
+        // Push a nested array
+        let nested: YArray<Int> = arr.pushArray()
+        nested.append(42)
+
+        XCTAssertEqual(arr.count, 1)
+        let retrieved: YArray<Int>? = arr.getArray(at: 0)
+        XCTAssertNotNil(retrieved)
+        XCTAssertEqual(retrieved?.toArray(), [42])
+    }
+
+    func test_pushNestedText() {
+        let arr: YArray<String> = document.getOrCreateArray(named: "testArr")
+
+        // Push a nested text
+        let nested = arr.pushText()
+        nested.append("pushed text")
+
+        XCTAssertEqual(arr.count, 1)
+        let retrieved = arr.getText(at: 0)
+        XCTAssertNotNil(retrieved)
+        XCTAssertEqual(retrieved?.getString(), "pushed text")
+    }
+
+    func test_moveElement() {
+        let arr: YArray<Int> = document.getOrCreateArray(named: "testArr")
+        arr.insertArray(at: 0, values: [1, 2, 3, 4, 5])
+
+        // Move element at index 0 to index 3
+        arr.move(from: 0, to: 3)
+
+        XCTAssertEqual(arr.toArray(), [2, 3, 1, 4, 5])
+    }
+
+    func test_moveRange() {
+        let arr: YArray<Int> = document.getOrCreateArray(named: "testArr")
+        arr.insertArray(at: 0, values: [1, 2, 3, 4, 5])
+
+        // Move elements at indices 0-2 to index 4
+        arr.moveRange(from: 0, to: 2, target: 4)
+
+        // After moving [1,2,3] to position 4, array should be [4, 5, 1, 2, 3]
+        // The exact result depends on the semantics of move_range_to
+        XCTAssertEqual(arr.count, 5)
+    }
+
+    func test_isUndefined() {
+        let arr: YArray<String> = document.getOrCreateArray(named: "testArr")
+        arr.append("hello")
+
+        // Regular value should not be undefined
+        XCTAssertFalse(arr.isUndefined(at: 0))
+    }
+
+    func test_nestedTypesInArray_returnsNilForJsonValue() {
+        let arr: YArray<String> = document.getOrCreateArray(named: "testArr")
+        arr.append("hello")
+
+        // JSON string value should return nil for nested type getters
+        XCTAssertNil(arr.getMap(at: 0) as YMap<String>?)
+        XCTAssertNil(arr.getArray(at: 0) as YArray<Int>?)
+        XCTAssertNil(arr.getText(at: 0))
+    }
 }

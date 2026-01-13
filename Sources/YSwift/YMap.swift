@@ -350,3 +350,133 @@ extension YMap {
         }
     }
 }
+
+// MARK: - Nested Shared Type Support
+
+extension YMap {
+    /// Returns a nested YArray for the specified key.
+    /// - Parameters:
+    ///   - key: The key that identifies the nested array.
+    ///   - transaction: An optional transaction to use.
+    /// - Returns: The nested array, or nil if no array exists for that key.
+    public func getArray<U: Codable>(forKey key: String, transaction: YrsTransaction? = nil) -> YArray<U>? {
+        withTransaction(transaction) { txn in
+            self._map.getArray(tx: txn, key: key).map { YArray(array: $0, document: self.document) }
+        }
+    }
+
+    /// Returns a nested YMap for the specified key.
+    /// - Parameters:
+    ///   - key: The key that identifies the nested map.
+    ///   - transaction: An optional transaction to use.
+    /// - Returns: The nested map, or nil if no map exists for that key.
+    public func getMap<U: Codable>(forKey key: String, transaction: YrsTransaction? = nil) -> YMap<U>? {
+        withTransaction(transaction) { txn in
+            self._map.getMap(tx: txn, key: key).map { YMap<U>(map: $0, document: self.document) }
+        }
+    }
+
+    /// Returns a nested YText for the specified key.
+    /// - Parameters:
+    ///   - key: The key that identifies the nested text.
+    ///   - transaction: An optional transaction to use.
+    /// - Returns: The nested text, or nil if no text exists for that key.
+    public func getText(forKey key: String, transaction: YrsTransaction? = nil) -> YText? {
+        withTransaction(transaction) { txn in
+            self._map.getText(tx: txn, key: key).map { YText(text: $0, document: self.document) }
+        }
+    }
+
+    /// Checks if the value at the specified key is an undefined reference.
+    /// - Parameters:
+    ///   - key: The key to check.
+    ///   - transaction: An optional transaction to use.
+    /// - Returns: True if the key exists but holds an undefined/deleted reference.
+    public func isUndefined(forKey key: String, transaction: YrsTransaction? = nil) -> Bool {
+        withTransaction(transaction) { txn in
+            self._map.isUndefined(tx: txn, key: key)
+        }
+    }
+
+    /// Inserts an empty nested YMap at the specified key.
+    /// - Parameters:
+    ///   - key: The key for the new nested map.
+    ///   - transaction: An optional transaction to use.
+    /// - Returns: The newly inserted nested map.
+    @discardableResult
+    public func insertMap<U: Codable>(forKey key: String, transaction: YrsTransaction? = nil) -> YMap<U> {
+        withTransaction(transaction) { txn in
+            YMap<U>(map: self._map.insertMap(tx: txn, key: key), document: self.document)
+        }
+    }
+
+    /// Inserts an empty nested YArray at the specified key.
+    /// - Parameters:
+    ///   - key: The key for the new nested array.
+    ///   - transaction: An optional transaction to use.
+    /// - Returns: The newly inserted nested array.
+    @discardableResult
+    public func insertArray<U: Codable>(forKey key: String, transaction: YrsTransaction? = nil) -> YArray<U> {
+        withTransaction(transaction) { txn in
+            YArray<U>(array: self._map.insertArray(tx: txn, key: key), document: self.document)
+        }
+    }
+
+    /// Inserts an empty nested YText at the specified key.
+    /// - Parameters:
+    ///   - key: The key for the new nested text.
+    ///   - transaction: An optional transaction to use.
+    /// - Returns: The newly inserted nested text.
+    @discardableResult
+    public func insertText(forKey key: String, transaction: YrsTransaction? = nil) -> YText {
+        withTransaction(transaction) { txn in
+            YText(text: self._map.insertText(tx: txn, key: key), document: self.document)
+        }
+    }
+
+    /// Updates value only if different from current value.
+    /// - Parameters:
+    ///   - value: The new value to set.
+    ///   - key: The key to update.
+    ///   - transaction: An optional transaction to use.
+    /// - Returns: True if the value was updated, false if unchanged.
+    @discardableResult
+    public func tryUpdate(_ value: T, forKey key: String, transaction: YrsTransaction? = nil) -> Bool {
+        withTransaction(transaction) { txn in
+            self._map.tryUpdate(tx: txn, key: key, value: Coder.encoded(value))
+        }
+    }
+
+    /// Gets existing nested map or creates new one at key.
+    /// - Parameters:
+    ///   - key: The key for the nested map.
+    ///   - transaction: An optional transaction to use.
+    /// - Returns: The existing or newly created nested map.
+    public func getOrInsertMap<U: Codable>(forKey key: String, transaction: YrsTransaction? = nil) -> YMap<U> {
+        withTransaction(transaction) { txn in
+            YMap<U>(map: self._map.getOrInsertMap(tx: txn, key: key), document: self.document)
+        }
+    }
+
+    /// Gets existing nested array or creates new one at key.
+    /// - Parameters:
+    ///   - key: The key for the nested array.
+    ///   - transaction: An optional transaction to use.
+    /// - Returns: The existing or newly created nested array.
+    public func getOrInsertArray<U: Codable>(forKey key: String, transaction: YrsTransaction? = nil) -> YArray<U> {
+        withTransaction(transaction) { txn in
+            YArray<U>(array: self._map.getOrInsertArray(tx: txn, key: key), document: self.document)
+        }
+    }
+
+    /// Gets existing nested text or creates new one at key.
+    /// - Parameters:
+    ///   - key: The key for the nested text.
+    ///   - transaction: An optional transaction to use.
+    /// - Returns: The existing or newly created nested text.
+    public func getOrInsertText(forKey key: String, transaction: YrsTransaction? = nil) -> YText {
+        withTransaction(transaction) { txn in
+            YText(text: self._map.getOrInsertText(tx: txn, key: key), document: self.document)
+        }
+    }
+}

@@ -34,6 +34,7 @@ use crate::subdoc::YrsDocOptions;
 use crate::subdoc::YrsSubdocsEvent;
 use crate::subdoc::YrsSubdocsObservationDelegate;
 use crate::subscription::YSubscription;
+use crate::text::YrsDiff;
 use crate::text::YrsText;
 use crate::text::YrsTextObservationDelegate;
 use crate::transaction::YrsTransaction;

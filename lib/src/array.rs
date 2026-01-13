@@ -1,5 +1,7 @@
 use crate::doc::{YrsCollectionPtr, YrsDoc};
+use crate::map::YrsMap;
 use crate::subscription::YSubscription;
+use crate::text::YrsText;
 use crate::transaction::YrsTransaction;
 use crate::{change::YrsChange, error::CodingError};
 use std::cell::RefCell;
@@ -257,5 +259,136 @@ impl YrsArray {
         let inner_doc = doc.inner().clone();
         let inserted = arr.insert(tx, index, inner_doc);
         Arc::new(YrsDoc::from_doc(inserted))
+    }
+
+    // MARK: - Nested shared type methods
+
+    /// Gets a nested YMap at the specified index.
+    pub(crate) fn get_map(&self, transaction: &YrsTransaction, index: u32) -> Option<Arc<YrsMap>> {
+        let tx = transaction.transaction();
+        let tx = tx.as_ref().unwrap();
+        let arr = self.0.borrow();
+        if let Some(Out::YMap(nested)) = arr.get(tx, index) {
+            Some(Arc::new(YrsMap::from(nested)))
+        } else {
+            None
+        }
+    }
+
+    /// Gets a nested YArray at the specified index.
+    pub(crate) fn get_array(&self, transaction: &YrsTransaction, index: u32) -> Option<Arc<YrsArray>> {
+        let tx = transaction.transaction();
+        let tx = tx.as_ref().unwrap();
+        let arr = self.0.borrow();
+        if let Some(Out::YArray(nested)) = arr.get(tx, index) {
+            Some(Arc::new(YrsArray::from(nested)))
+        } else {
+            None
+        }
+    }
+
+    /// Gets a nested YText at the specified index.
+    pub(crate) fn get_text(&self, transaction: &YrsTransaction, index: u32) -> Option<Arc<YrsText>> {
+        let tx = transaction.transaction();
+        let tx = tx.as_ref().unwrap();
+        let arr = self.0.borrow();
+        if let Some(Out::YText(nested)) = arr.get(tx, index) {
+            Some(Arc::new(YrsText::from(nested)))
+        } else {
+            None
+        }
+    }
+
+    /// Checks if value at index is an undefined reference.
+    pub(crate) fn is_undefined(&self, transaction: &YrsTransaction, index: u32) -> bool {
+        let tx = transaction.transaction();
+        let tx = tx.as_ref().unwrap();
+        let arr = self.0.borrow();
+        matches!(arr.get(tx, index), Some(Out::UndefinedRef(_)))
+    }
+
+    /// Inserts an empty nested YMap at the specified index.
+    pub(crate) fn insert_map(&self, transaction: &YrsTransaction, index: u32) -> Arc<YrsMap> {
+        use yrs::{MapPrelim, MapRef};
+        let mut tx = transaction.transaction();
+        let tx = tx.as_mut().unwrap();
+        let arr = self.0.borrow_mut();
+        let prelim: MapPrelim = Default::default();
+        let nested: MapRef = arr.insert(tx, index, prelim);
+        Arc::new(YrsMap::from(nested))
+    }
+
+    /// Inserts an empty nested YArray at the specified index.
+    pub(crate) fn insert_array(&self, transaction: &YrsTransaction, index: u32) -> Arc<YrsArray> {
+        use yrs::ArrayPrelim;
+        let mut tx = transaction.transaction();
+        let tx = tx.as_mut().unwrap();
+        let arr = self.0.borrow_mut();
+        let nested: ArrayRef = arr.insert(tx, index, ArrayPrelim::default());
+        Arc::new(YrsArray::from(nested))
+    }
+
+    /// Inserts an empty nested YText at the specified index.
+    pub(crate) fn insert_text(&self, transaction: &YrsTransaction, index: u32) -> Arc<YrsText> {
+        use yrs::{TextPrelim, TextRef};
+        let mut tx = transaction.transaction();
+        let tx = tx.as_mut().unwrap();
+        let arr = self.0.borrow_mut();
+        let nested: TextRef = arr.insert(tx, index, TextPrelim::new(""));
+        Arc::new(YrsText::from(nested))
+    }
+
+    /// Pushes an empty nested YMap to the end.
+    pub(crate) fn push_map(&self, transaction: &YrsTransaction) -> Arc<YrsMap> {
+        use yrs::{MapPrelim, MapRef};
+        let mut tx = transaction.transaction();
+        let tx = tx.as_mut().unwrap();
+        let arr = self.0.borrow_mut();
+        let prelim: MapPrelim = Default::default();
+        let nested: MapRef = arr.push_back(tx, prelim);
+        Arc::new(YrsMap::from(nested))
+    }
+
+    /// Pushes an empty nested YArray to the end.
+    pub(crate) fn push_array(&self, transaction: &YrsTransaction) -> Arc<YrsArray> {
+        use yrs::ArrayPrelim;
+        let mut tx = transaction.transaction();
+        let tx = tx.as_mut().unwrap();
+        let arr = self.0.borrow_mut();
+        let nested: ArrayRef = arr.push_back(tx, ArrayPrelim::default());
+        Arc::new(YrsArray::from(nested))
+    }
+
+    /// Pushes an empty nested YText to the end.
+    pub(crate) fn push_text(&self, transaction: &YrsTransaction) -> Arc<YrsText> {
+        use yrs::{TextPrelim, TextRef};
+        let mut tx = transaction.transaction();
+        let tx = tx.as_mut().unwrap();
+        let arr = self.0.borrow_mut();
+        let nested: TextRef = arr.push_back(tx, TextPrelim::new(""));
+        Arc::new(YrsText::from(nested))
+    }
+
+    /// Moves element from source index to target index.
+    pub(crate) fn move_to(&self, transaction: &YrsTransaction, source: u32, target: u32) {
+        let mut tx = transaction.transaction();
+        let tx = tx.as_mut().unwrap();
+        let arr = self.0.borrow_mut();
+        arr.move_to(tx, source, target);
+    }
+
+    /// Moves range of elements to target index.
+    pub(crate) fn move_range_to(
+        &self,
+        transaction: &YrsTransaction,
+        start: u32,
+        end: u32,
+        target: u32,
+    ) {
+        use yrs::Assoc;
+        let mut tx = transaction.transaction();
+        let tx = tx.as_mut().unwrap();
+        let arr = self.0.borrow_mut();
+        arr.move_range_to(tx, start, Assoc::After, end, Assoc::Before, target);
     }
 }

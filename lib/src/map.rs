@@ -1,7 +1,9 @@
+use crate::array::YrsArray;
 use crate::doc::{YrsCollectionPtr, YrsDoc};
 use crate::error::CodingError;
 use crate::mapchange::{YrsEntryChange, YrsMapChange};
 use crate::subscription::YSubscription;
+use crate::text::YrsText;
 use crate::transaction::YrsTransaction;
 use std::cell::RefCell;
 use std::fmt::Debug;
@@ -325,6 +327,185 @@ impl YrsMap {
         let inner_doc = doc.inner().clone();
         let inserted = map.insert(tx, key, inner_doc);
         Arc::new(YrsDoc::from_doc(inserted))
+    }
+
+    // MARK: - Nested shared type methods
+
+    /// Gets a nested YMap for the specified key.
+    /// Returns None if the key doesn't exist or the value is not a map.
+    pub(crate) fn get_map(
+        &self,
+        transaction: &YrsTransaction,
+        key: String,
+    ) -> Option<Arc<YrsMap>> {
+        let binding = transaction.transaction();
+        let tx = binding.as_ref().unwrap();
+        let map = self.0.borrow();
+
+        if let Some(Out::YMap(nested)) = map.get(tx, key.as_str()) {
+            Some(Arc::new(YrsMap::from(nested)))
+        } else {
+            None
+        }
+    }
+
+    /// Gets a nested YArray for the specified key.
+    /// Returns None if the key doesn't exist or the value is not an array.
+    pub(crate) fn get_array(
+        &self,
+        transaction: &YrsTransaction,
+        key: String,
+    ) -> Option<Arc<YrsArray>> {
+        let binding = transaction.transaction();
+        let tx = binding.as_ref().unwrap();
+        let map = self.0.borrow();
+
+        if let Some(Out::YArray(nested)) = map.get(tx, key.as_str()) {
+            Some(Arc::new(YrsArray::from(nested)))
+        } else {
+            None
+        }
+    }
+
+    /// Gets a nested YText for the specified key.
+    /// Returns None if the key doesn't exist or the value is not text.
+    pub(crate) fn get_text(
+        &self,
+        transaction: &YrsTransaction,
+        key: String,
+    ) -> Option<Arc<YrsText>> {
+        let binding = transaction.transaction();
+        let tx = binding.as_ref().unwrap();
+        let map = self.0.borrow();
+
+        if let Some(Out::YText(nested)) = map.get(tx, key.as_str()) {
+            Some(Arc::new(YrsText::from(nested)))
+        } else {
+            None
+        }
+    }
+
+    /// Checks if the value at the specified key is an undefined reference.
+    /// Returns true if the key exists but holds an undefined/deleted reference.
+    pub(crate) fn is_undefined(
+        &self,
+        transaction: &YrsTransaction,
+        key: String,
+    ) -> bool {
+        let binding = transaction.transaction();
+        let tx = binding.as_ref().unwrap();
+        let map = self.0.borrow();
+
+        matches!(map.get(tx, key.as_str()), Some(Out::UndefinedRef(_)))
+    }
+
+    /// Inserts an empty nested YMap at the specified key.
+    /// Returns a reference to the inserted map.
+    pub(crate) fn insert_map(
+        &self,
+        transaction: &YrsTransaction,
+        key: String,
+    ) -> Arc<YrsMap> {
+        use yrs::MapPrelim;
+
+        let mut binding = transaction.transaction();
+        let tx = binding.as_mut().unwrap();
+        let map = self.0.borrow_mut();
+
+        let prelim: MapPrelim = Default::default();
+        let nested: MapRef = map.insert(tx, key, prelim);
+        Arc::new(YrsMap::from(nested))
+    }
+
+    /// Inserts an empty nested YArray at the specified key.
+    /// Returns a reference to the inserted array.
+    pub(crate) fn insert_array(
+        &self,
+        transaction: &YrsTransaction,
+        key: String,
+    ) -> Arc<YrsArray> {
+        use yrs::{ArrayPrelim, ArrayRef};
+
+        let mut binding = transaction.transaction();
+        let tx = binding.as_mut().unwrap();
+        let map = self.0.borrow_mut();
+
+        let nested: ArrayRef = map.insert(tx, key, ArrayPrelim::default());
+        Arc::new(YrsArray::from(nested))
+    }
+
+    /// Inserts an empty nested YText at the specified key.
+    /// Returns a reference to the inserted text.
+    pub(crate) fn insert_text(
+        &self,
+        transaction: &YrsTransaction,
+        key: String,
+    ) -> Arc<YrsText> {
+        use yrs::{TextPrelim, TextRef};
+
+        let mut binding = transaction.transaction();
+        let tx = binding.as_mut().unwrap();
+        let map = self.0.borrow_mut();
+
+        let nested: TextRef = map.insert(tx, key, TextPrelim::new(""));
+        Arc::new(YrsText::from(nested))
+    }
+
+    /// Updates value only if different from current. Returns true if updated.
+    pub(crate) fn try_update(
+        &self,
+        transaction: &YrsTransaction,
+        key: String,
+        value: String,
+    ) -> bool {
+        use yrs::Map;
+        let any_value = Any::from_json(value.as_str()).unwrap();
+        let mut binding = transaction.transaction();
+        let tx = binding.as_mut().unwrap();
+        let map = self.0.borrow_mut();
+        map.try_update(tx, key, any_value)
+    }
+
+    /// Gets existing nested map or creates new one at key.
+    pub(crate) fn get_or_insert_map(
+        &self,
+        transaction: &YrsTransaction,
+        key: String,
+    ) -> Arc<YrsMap> {
+        use yrs::Map;
+        let mut binding = transaction.transaction();
+        let tx = binding.as_mut().unwrap();
+        let map = self.0.borrow_mut();
+        let nested: MapRef = map.get_or_init(tx, key.as_str());
+        Arc::new(YrsMap::from(nested))
+    }
+
+    /// Gets existing nested array or creates new one at key.
+    pub(crate) fn get_or_insert_array(
+        &self,
+        transaction: &YrsTransaction,
+        key: String,
+    ) -> Arc<YrsArray> {
+        use yrs::{ArrayRef, Map};
+        let mut binding = transaction.transaction();
+        let tx = binding.as_mut().unwrap();
+        let map = self.0.borrow_mut();
+        let nested: ArrayRef = map.get_or_init(tx, key.as_str());
+        Arc::new(YrsArray::from(nested))
+    }
+
+    /// Gets existing nested text or creates new one at key.
+    pub(crate) fn get_or_insert_text(
+        &self,
+        transaction: &YrsTransaction,
+        key: String,
+    ) -> Arc<YrsText> {
+        use yrs::{Map, TextRef};
+        let mut binding = transaction.transaction();
+        let tx = binding.as_mut().unwrap();
+        let map = self.0.borrow_mut();
+        let nested: TextRef = map.get_or_init(tx, key.as_str());
+        Arc::new(YrsText::from(nested))
     }
 }
 

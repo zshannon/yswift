@@ -124,6 +124,19 @@ interface YrsMap {
   // Subdoc methods
   YrsDoc? get_doc([ByRef] YrsTransaction tx, string key);
   YrsDoc insert_doc([ByRef] YrsTransaction tx, string key, [ByRef] YrsDoc doc);
+
+  // Nested shared type methods
+  YrsArray? get_array([ByRef] YrsTransaction tx, string key);
+  YrsMap? get_map([ByRef] YrsTransaction tx, string key);
+  YrsText? get_text([ByRef] YrsTransaction tx, string key);
+  boolean is_undefined([ByRef] YrsTransaction tx, string key);
+  YrsArray insert_array([ByRef] YrsTransaction tx, string key);
+  YrsMap insert_map([ByRef] YrsTransaction tx, string key);
+  YrsText insert_text([ByRef] YrsTransaction tx, string key);
+  boolean try_update([ByRef] YrsTransaction tx, string key, string value);
+  YrsArray get_or_insert_array([ByRef] YrsTransaction tx, string key);
+  YrsMap get_or_insert_map([ByRef] YrsTransaction tx, string key);
+  YrsText get_or_insert_text([ByRef] YrsTransaction tx, string key);
 };
 
 [Enum]
@@ -169,6 +182,20 @@ interface YrsArray {
   // Subdoc methods
   YrsDoc? get_doc([ByRef] YrsTransaction tx, u32 index);
   YrsDoc insert_doc([ByRef] YrsTransaction tx, u32 index, [ByRef] YrsDoc doc);
+
+  // Nested shared type methods
+  YrsArray? get_array([ByRef] YrsTransaction tx, u32 index);
+  YrsMap? get_map([ByRef] YrsTransaction tx, u32 index);
+  YrsText? get_text([ByRef] YrsTransaction tx, u32 index);
+  boolean is_undefined([ByRef] YrsTransaction tx, u32 index);
+  YrsArray insert_array([ByRef] YrsTransaction tx, u32 index);
+  YrsMap insert_map([ByRef] YrsTransaction tx, u32 index);
+  YrsText insert_text([ByRef] YrsTransaction tx, u32 index);
+  YrsArray push_array([ByRef] YrsTransaction tx);
+  YrsMap push_map([ByRef] YrsTransaction tx);
+  YrsText push_text([ByRef] YrsTransaction tx);
+  void move_to([ByRef] YrsTransaction tx, u32 source, u32 target);
+  void move_range_to([ByRef] YrsTransaction tx, u32 start, u32 end, u32 target);
 };
 
 callback interface YrsArrayEachDelegate {
@@ -198,6 +225,8 @@ interface YrsText {
   void remove_range([ByRef] YrsTransaction tx, u32 start, u32 length);
   u32 length([ByRef] YrsTransaction tx);
   YSubscription observe(YrsTextObservationDelegate delegate);
+  void apply_delta([ByRef] YrsTransaction tx, sequence<YrsDelta> delta);
+  sequence<YrsDiff> diff([ByRef] YrsTransaction tx);
 };
 
 callback interface YrsTextObservationDelegate {
@@ -209,6 +238,13 @@ interface YrsDelta {
   Inserted(string value, string attrs);
   Deleted(u32 index);
   Retained(u32 index, string attrs);
+};
+
+[Enum]
+interface YrsDiff {
+  Text(string value, string attrs);
+  Embed(string value, string attrs);
+  Other(string attrs);
 };
 
 /// A manager type able to track changes occurring in a context of a given document.

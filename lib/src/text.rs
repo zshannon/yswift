@@ -147,4 +147,71 @@ impl YrsText {
 
             Arc::new(YSubscription::new(subscription))
     }
+
+    /// Applies a delta to the text. Delta is a JSON array of operations.
+    pub(crate) fn apply_delta(&self, transaction: &YrsTransaction, delta: Vec<YrsDelta>) {
+        use yrs::types::Delta;
+        let mut tx = transaction.transaction();
+        let tx = tx.as_mut().unwrap();
+
+        let deltas: Vec<Delta<Any>> = delta.into_iter().map(|d| {
+            match d {
+                YrsDelta::Inserted { value, attrs } => {
+                    let any_value = Any::from_json(value.as_str()).unwrap();
+                    let attrs_parsed = if attrs.is_empty() {
+                        None
+                    } else {
+                        Some(Box::new(YrsAttrs::from(attrs).0))
+                    };
+                    Delta::Inserted(any_value, attrs_parsed)
+                }
+                YrsDelta::Deleted { index } => Delta::Deleted(index),
+                YrsDelta::Retained { index, attrs } => {
+                    let attrs_parsed = if attrs.is_empty() {
+                        None
+                    } else {
+                        Some(Box::new(YrsAttrs::from(attrs).0))
+                    };
+                    Delta::Retain(index, attrs_parsed)
+                }
+            }
+        }).collect();
+
+        self.0.borrow_mut().apply_delta(tx, deltas);
+    }
+
+    /// Returns the text content as a list of diff chunks with formatting.
+    pub(crate) fn diff(&self, transaction: &YrsTransaction) -> Vec<YrsDiff> {
+        use yrs::types::text::Diff;
+        let tx = transaction.transaction();
+        let tx = tx.as_ref().unwrap();
+
+        let diffs: Vec<Diff<()>> = self.0.borrow().diff(tx, |_| ());
+        diffs.into_iter().map(|d| YrsDiff::from(&d)).collect()
+    }
+}
+
+/// Represents a diff chunk from YText.
+pub(crate) enum YrsDiff {
+    Text { value: String, attrs: String },
+    Embed { value: String, attrs: String },
+    Other { attrs: String },
+}
+
+impl From<&yrs::types::text::Diff<()>> for YrsDiff {
+    fn from(diff: &yrs::types::text::Diff<()>) -> Self {
+        use yrs::Out;
+        let attrs = diff.attributes.as_ref()
+            .map(|a| YrsAttrs::from(*a.clone()).into())
+            .unwrap_or_default();
+
+        match &diff.insert {
+            Out::Any(any) => {
+                let mut buf = String::new();
+                any.to_json(&mut buf);
+                YrsDiff::Text { value: buf, attrs }
+            }
+            _ => YrsDiff::Other { attrs }
+        }
+    }
 }

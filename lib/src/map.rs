@@ -5,23 +5,51 @@ use crate::mapchange::{try_from_entry_change, YrsMapChange};
 use crate::subscription::YSubscription;
 use crate::text::YrsText;
 use crate::transaction::YrsTransaction;
-use std::cell::RefCell;
+use parking_lot::ReentrantMutex;
+use std::cell::UnsafeCell;
 use std::fmt::Debug;
 use std::sync::Arc;
 use yrs::branch::Branch;
 use yrs::{Any, Map, MapRef, Observable, Out};
 
-pub(crate) struct YrsMap(RefCell<MapRef>);
+pub(crate) struct YrsMap(ReentrantMutex<UnsafeCell<MapRef>>);
 
 // Marks that this type can be transferred across thread boundaries.
+// Safe because ReentrantMutex provides proper thread synchronization.
 unsafe impl Send for YrsMap {}
 // Marks that this type is safe to share references between threads.
+// Safe because ReentrantMutex provides proper thread synchronization.
 unsafe impl Sync for YrsMap {}
+
+/// A guard that holds the lock and provides access to the inner MapRef.
+pub(crate) struct MapRefGuard<'a> {
+    _guard: parking_lot::ReentrantMutexGuard<'a, UnsafeCell<MapRef>>,
+    ptr: *mut MapRef,
+}
+
+impl<'a> MapRefGuard<'a> {
+    pub(crate) fn as_ref(&self) -> &MapRef {
+        unsafe { &*self.ptr }
+    }
+
+    pub(crate) fn as_mut(&mut self) -> &mut MapRef {
+        unsafe { &mut *self.ptr }
+    }
+}
+
+impl YrsMap {
+    fn inner(&self) -> MapRefGuard<'_> {
+        let guard = self.0.lock();
+        let ptr = unsafe { (*self.0.data_ptr()).get() };
+        MapRefGuard { _guard: guard, ptr }
+    }
+}
 
 impl AsRef<Branch> for YrsMap {
     fn as_ref(&self) -> &Branch {
         //FIXME: after yrs v0.18 use logical references
-        let branch = &*self.0.borrow();
+        let guard = self.inner();
+        let branch = guard.as_ref();
         unsafe { std::mem::transmute(branch.as_ref()) }
     }
 }
@@ -30,7 +58,7 @@ impl AsRef<Branch> for YrsMap {
 // converting from a MapRef type into a YrsMap type.
 impl From<MapRef> for YrsMap {
     fn from(value: MapRef) -> Self {
-        YrsMap(RefCell::from(value))
+        YrsMap(ReentrantMutex::new(UnsafeCell::new(value)))
     }
 }
 
@@ -69,8 +97,8 @@ IMPL order:
 
 impl YrsMap {
     pub(crate) fn raw_ptr(&self) -> YrsCollectionPtr {
-        let borrowed = self.0.borrow();
-        YrsCollectionPtr::from(borrowed.as_ref())
+        let guard = self.inner();
+        YrsCollectionPtr::from(guard.as_ref().as_ref())
     }
 
     /// Inserts the key and value you provide into the map.
@@ -83,9 +111,9 @@ impl YrsMap {
         let tx = binding.as_mut().unwrap();
 
         // pull out a mutable reference to the YrsMap this type wraps
-        let map = self.0.borrow_mut();
+        let mut map = self.inner();
         // insert into the wrapped map.
-        map.insert(tx, key, any_value);
+        map.as_mut().insert(tx, key, any_value);
 
         // Documentation note from YrsMap about inserting a preliminary type - for future
         // reference...
@@ -96,7 +124,7 @@ impl YrsMap {
 
     /// Returns the size of the map.
     pub(crate) fn length(&self, transaction: &YrsTransaction) -> u32 {
-        let map = self.0.borrow();
+        let map = self.inner();
         // acquire a transaction, but we don't need to borrow it since we're
         // not mutating anything in this method.
         let binding = transaction.transaction();
@@ -104,18 +132,18 @@ impl YrsMap {
         // If we try and do the above on a single line, I get the error:
         // creates a temporary value which is freed while still in use
 
-        map.len(tx)
+        map.as_ref().len(tx)
     }
 
     /// Returns a Boolean value that indicates whether the map contains the key you provide.
     pub(crate) fn contains_key(&self, transaction: &YrsTransaction, key: String) -> bool {
-        let map = self.0.borrow();
+        let map = self.inner();
         // acquire a transaction, but we don't need to borrow it since we're
         // not mutating anything in this method.
         let tx = transaction.transaction();
         let tx = tx.as_ref().unwrap();
 
-        map.contains_key(tx, key.as_str())
+        map.as_ref().contains_key(tx, key.as_str())
     }
 
     pub(crate) fn get(
@@ -125,8 +153,8 @@ impl YrsMap {
     ) -> Result<String, CodingError> {
         let binding = transaction.transaction();
         let tx = binding.as_ref().unwrap();
-        let map = self.0.borrow();
-        let v = map.get(tx, key.as_str()).unwrap();
+        let map = self.inner();
+        let v = map.as_ref().get(tx, key.as_str()).unwrap();
         let mut buf = String::new();
         if let Out::Any(any) = v {
             any.to_json(&mut buf);
@@ -146,9 +174,9 @@ impl YrsMap {
         let tx = binding.as_mut().unwrap();
 
         // get a mutable reference to the YrsMap this type wraps
-        let map = self.0.borrow_mut();
+        let mut map = self.inner();
 
-        let optional_value = map.remove(tx, key.as_str());
+        let optional_value = map.as_mut().remove(tx, key.as_str());
         match optional_value {
             // there was some kind of value in the map, try to cast it and convert
             // to JSON
@@ -175,9 +203,9 @@ impl YrsMap {
         let tx = binding.as_mut().unwrap();
 
         // get a mutable reference to the YrsMap this type wraps
-        let map = self.0.borrow_mut();
+        let mut map = self.inner();
 
-        map.clear(tx);
+        map.as_mut().clear(tx);
     }
 
     pub(crate) fn keys(
@@ -198,8 +226,8 @@ impl YrsMap {
         let binding = transaction.transaction();
         let txn = binding.as_ref().unwrap();
 
-        let map = self.0.borrow();
-        map.keys(txn).for_each(|key_value| {
+        let map = self.inner();
+        map.as_ref().keys(txn).for_each(|key_value| {
             delegate.call(key_value.to_string());
         });
     }
@@ -217,8 +245,8 @@ impl YrsMap {
         let binding = transaction.transaction();
         let txn = binding.as_ref().unwrap();
 
-        let map = self.0.borrow();
-        let iterator = map.values(txn);
+        let map = self.inner();
+        let iterator = map.as_ref().values(txn);
         iterator.for_each(|value_list| {
             // value is being returned as Vec<Value> from YrsMap - unclear
             // why, but maybe we iterate over each element and attempt to any.to_json on it?
@@ -255,8 +283,8 @@ impl YrsMap {
         let binding = transaction.transaction();
         let txn = binding.as_ref().unwrap();
 
-        let map = self.0.borrow();
-        let iterator = map.iter(txn);
+        let map = self.inner();
+        let iterator = map.as_ref().iter(txn);
         iterator.for_each(|key_value_pair| {
             // key_value_pair is being returned as a tuple of (&str, Value)
             // we'll pass the key value (String) straight through to the delegate,
@@ -276,9 +304,9 @@ impl YrsMap {
     }
 
     pub(crate) fn observe(&self, delegate: Box<dyn YrsMapObservationDelegate>) -> Arc<YSubscription> {
-        let subscription = self
-            .0
-            .borrow_mut()
+        let mut map = self.inner();
+        let subscription = map
+            .as_mut()
             .observe(move |transaction, map_event| {
                 let delta = map_event.keys(transaction);
                 // Filter out nested shared types (YMap, YArray, YText, YDoc) which return None
@@ -303,9 +331,9 @@ impl YrsMap {
     ) -> Option<Arc<YrsDoc>> {
         let binding = transaction.transaction();
         let tx = binding.as_ref().unwrap();
-        let map = self.0.borrow();
+        let map = self.inner();
 
-        if let Some(Out::YDoc(doc)) = map.get(tx, key.as_str()) {
+        if let Some(Out::YDoc(doc)) = map.as_ref().get(tx, key.as_str()) {
             Some(Arc::new(YrsDoc::from_doc(doc)))
         } else {
             None
@@ -322,11 +350,11 @@ impl YrsMap {
     ) -> Arc<YrsDoc> {
         let mut binding = transaction.transaction();
         let tx = binding.as_mut().unwrap();
-        let map = self.0.borrow_mut();
+        let mut map = self.inner();
 
         // Clone the inner Doc and insert it
         let inner_doc = doc.inner().clone();
-        let inserted = map.insert(tx, key, inner_doc);
+        let inserted = map.as_mut().insert(tx, key, inner_doc);
         Arc::new(YrsDoc::from_doc(inserted))
     }
 
@@ -341,9 +369,9 @@ impl YrsMap {
     ) -> Option<Arc<YrsMap>> {
         let binding = transaction.transaction();
         let tx = binding.as_ref().unwrap();
-        let map = self.0.borrow();
+        let map = self.inner();
 
-        if let Some(Out::YMap(nested)) = map.get(tx, key.as_str()) {
+        if let Some(Out::YMap(nested)) = map.as_ref().get(tx, key.as_str()) {
             Some(Arc::new(YrsMap::from(nested)))
         } else {
             None
@@ -359,9 +387,9 @@ impl YrsMap {
     ) -> Option<Arc<YrsArray>> {
         let binding = transaction.transaction();
         let tx = binding.as_ref().unwrap();
-        let map = self.0.borrow();
+        let map = self.inner();
 
-        if let Some(Out::YArray(nested)) = map.get(tx, key.as_str()) {
+        if let Some(Out::YArray(nested)) = map.as_ref().get(tx, key.as_str()) {
             Some(Arc::new(YrsArray::from(nested)))
         } else {
             None
@@ -377,9 +405,9 @@ impl YrsMap {
     ) -> Option<Arc<YrsText>> {
         let binding = transaction.transaction();
         let tx = binding.as_ref().unwrap();
-        let map = self.0.borrow();
+        let map = self.inner();
 
-        if let Some(Out::YText(nested)) = map.get(tx, key.as_str()) {
+        if let Some(Out::YText(nested)) = map.as_ref().get(tx, key.as_str()) {
             Some(Arc::new(YrsText::from(nested)))
         } else {
             None
@@ -395,9 +423,9 @@ impl YrsMap {
     ) -> bool {
         let binding = transaction.transaction();
         let tx = binding.as_ref().unwrap();
-        let map = self.0.borrow();
+        let map = self.inner();
 
-        matches!(map.get(tx, key.as_str()), Some(Out::UndefinedRef(_)))
+        matches!(map.as_ref().get(tx, key.as_str()), Some(Out::UndefinedRef(_)))
     }
 
     /// Inserts an empty nested YMap at the specified key.
@@ -411,10 +439,10 @@ impl YrsMap {
 
         let mut binding = transaction.transaction();
         let tx = binding.as_mut().unwrap();
-        let map = self.0.borrow_mut();
+        let mut map = self.inner();
 
         let prelim: MapPrelim = Default::default();
-        let nested: MapRef = map.insert(tx, key, prelim);
+        let nested: MapRef = map.as_mut().insert(tx, key, prelim);
         Arc::new(YrsMap::from(nested))
     }
 
@@ -429,9 +457,9 @@ impl YrsMap {
 
         let mut binding = transaction.transaction();
         let tx = binding.as_mut().unwrap();
-        let map = self.0.borrow_mut();
+        let mut map = self.inner();
 
-        let nested: ArrayRef = map.insert(tx, key, ArrayPrelim::default());
+        let nested: ArrayRef = map.as_mut().insert(tx, key, ArrayPrelim::default());
         Arc::new(YrsArray::from(nested))
     }
 
@@ -446,9 +474,9 @@ impl YrsMap {
 
         let mut binding = transaction.transaction();
         let tx = binding.as_mut().unwrap();
-        let map = self.0.borrow_mut();
+        let mut map = self.inner();
 
-        let nested: TextRef = map.insert(tx, key, TextPrelim::new(""));
+        let nested: TextRef = map.as_mut().insert(tx, key, TextPrelim::new(""));
         Arc::new(YrsText::from(nested))
     }
 
@@ -463,8 +491,8 @@ impl YrsMap {
         let any_value = Any::from_json(value.as_str()).unwrap();
         let mut binding = transaction.transaction();
         let tx = binding.as_mut().unwrap();
-        let map = self.0.borrow_mut();
-        map.try_update(tx, key, any_value)
+        let mut map = self.inner();
+        map.as_mut().try_update(tx, key, any_value)
     }
 
     /// Gets existing nested map or creates new one at key.
@@ -476,8 +504,8 @@ impl YrsMap {
         use yrs::Map;
         let mut binding = transaction.transaction();
         let tx = binding.as_mut().unwrap();
-        let map = self.0.borrow_mut();
-        let nested: MapRef = map.get_or_init(tx, key.as_str());
+        let mut map = self.inner();
+        let nested: MapRef = map.as_mut().get_or_init(tx, key.as_str());
         Arc::new(YrsMap::from(nested))
     }
 
@@ -490,8 +518,8 @@ impl YrsMap {
         use yrs::{ArrayRef, Map};
         let mut binding = transaction.transaction();
         let tx = binding.as_mut().unwrap();
-        let map = self.0.borrow_mut();
-        let nested: ArrayRef = map.get_or_init(tx, key.as_str());
+        let mut map = self.inner();
+        let nested: ArrayRef = map.as_mut().get_or_init(tx, key.as_str());
         Arc::new(YrsArray::from(nested))
     }
 
@@ -504,8 +532,8 @@ impl YrsMap {
         use yrs::{Map, TextRef};
         let mut binding = transaction.transaction();
         let tx = binding.as_mut().unwrap();
-        let map = self.0.borrow_mut();
-        let nested: TextRef = map.get_or_init(tx, key.as_str());
+        let mut map = self.inner();
+        let nested: TextRef = map.as_mut().get_or_init(tx, key.as_str());
         Arc::new(YrsText::from(nested))
     }
 }

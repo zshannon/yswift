@@ -3,30 +3,56 @@ use crate::delta::YrsDelta;
 use crate::subscription::YSubscription;
 use crate::transaction::YrsTransaction;
 use yrs::Any;
-use std::cell::RefCell;
+use parking_lot::ReentrantMutex;
+use std::cell::UnsafeCell;
 use std::fmt::Debug;
 use std::sync::Arc;
 use yrs::{GetString, Observable, Text, TextRef};
 use yrs::branch::Branch;
 use crate::doc::YrsCollectionPtr;
 
-pub(crate) struct YrsText(RefCell<TextRef>);
+pub(crate) struct YrsText(ReentrantMutex<UnsafeCell<TextRef>>);
 
+// Safe because ReentrantMutex provides proper thread synchronization.
 unsafe impl Send for YrsText {}
 unsafe impl Sync for YrsText {}
+
+/// A guard that holds the lock and provides access to the inner TextRef.
+pub(crate) struct TextRefGuard<'a> {
+    _guard: parking_lot::ReentrantMutexGuard<'a, UnsafeCell<TextRef>>,
+    ptr: *mut TextRef,
+}
+
+impl<'a> TextRefGuard<'a> {
+    pub(crate) fn as_ref(&self) -> &TextRef {
+        unsafe { &*self.ptr }
+    }
+
+    pub(crate) fn as_mut(&mut self) -> &mut TextRef {
+        unsafe { &mut *self.ptr }
+    }
+}
+
+impl YrsText {
+    fn inner(&self) -> TextRefGuard<'_> {
+        let guard = self.0.lock();
+        let ptr = unsafe { (*self.0.data_ptr()).get() };
+        TextRefGuard { _guard: guard, ptr }
+    }
+}
 
 impl AsRef<Branch> for YrsText {
     fn as_ref(&self) -> &Branch {
         //FIXME: after yrs v0.18 use logical references
-        let branch = &*self.0.borrow();
-        let branch_ref: &Branch = branch.as_ref();
+        let guard = self.inner();
+        let branch_ref: &Branch = guard.as_ref().as_ref();
         unsafe { std::mem::transmute::<&Branch, &Branch>(branch_ref) }
     }
 }
 
 impl From<TextRef> for YrsText {
     fn from(value: TextRef) -> Self {
-        YrsText(RefCell::from(value))
+        YrsText(ReentrantMutex::new(UnsafeCell::new(value)))
     }
 }
 
@@ -36,9 +62,10 @@ pub(crate) trait YrsTextObservationDelegate: Send + Sync + Debug {
 
 impl YrsText {
     pub(crate) fn raw_ptr(&self) -> YrsCollectionPtr {
-        let borrowed = self.0.borrow();
-        YrsCollectionPtr::from(borrowed.as_ref())
+        let guard = self.inner();
+        YrsCollectionPtr::from(guard.as_ref().as_ref())
     }
+
     pub(crate) fn format(
         &self,
         transaction: &YrsTransaction,
@@ -51,21 +78,21 @@ impl YrsText {
 
         let a = YrsAttrs::from(attrs);
 
-        self.0.borrow_mut().format(tx, index, length, a.0)
+        self.inner().as_mut().format(tx, index, length, a.0)
     }
 
     pub(crate) fn append(&self, tx: &YrsTransaction, text: String) {
         let mut tx = tx.transaction();
         let tx = tx.as_mut().unwrap();
 
-        self.0.borrow_mut().push(tx, text.as_str());
+        self.inner().as_mut().push(tx, text.as_str());
     }
 
     pub(crate) fn insert(&self, tx: &YrsTransaction, index: u32, chunk: String) {
         let mut tx = tx.transaction();
         let tx = tx.as_mut().unwrap();
 
-        self.0.borrow_mut().insert(tx, index, chunk.as_str())
+        self.inner().as_mut().insert(tx, index, chunk.as_str())
     }
 
     pub(crate) fn insert_with_attributes(
@@ -80,8 +107,8 @@ impl YrsText {
 
         let a = YrsAttrs::from(attrs);
 
-        self.0
-            .borrow_mut()
+        self.inner()
+            .as_mut()
             .insert_with_attributes(tx, index, chunk.as_str(), a.0)
     }
 
@@ -91,7 +118,7 @@ impl YrsText {
 
         let avalue = Any::from_json(content.as_str()).unwrap();
 
-        self.0.borrow_mut().insert_embed(tx, index, avalue);
+        self.inner().as_mut().insert_embed(tx, index, avalue);
     }
 
     pub(crate) fn insert_embed_with_attributes(
@@ -108,8 +135,8 @@ impl YrsText {
 
         let a = YrsAttrs::from(attrs);
 
-        self.0
-            .borrow_mut()
+        self.inner()
+            .as_mut()
             .insert_embed_with_attributes(tx, index, avalue, a.0);
     }
 
@@ -117,27 +144,27 @@ impl YrsText {
         let mut tx = tx.transaction();
         let tx = tx.as_mut().unwrap();
 
-        self.0.borrow().get_string(tx)
+        self.inner().as_ref().get_string(tx)
     }
 
     pub(crate) fn remove_range(&self, transaction: &YrsTransaction, start: u32, length: u32) {
         let mut tx = transaction.transaction();
         let tx = tx.as_mut().unwrap();
 
-        self.0.borrow_mut().remove_range(tx, start, length)
+        self.inner().as_mut().remove_range(tx, start, length)
     }
 
     pub(crate) fn length(&self, transaction: &YrsTransaction) -> u32 {
         let tx = transaction.transaction();
         let tx = tx.as_ref().unwrap();
 
-        self.0.borrow().len(tx)
+        self.inner().as_ref().len(tx)
     }
 
     pub(crate) fn observe(&self, delegate: Box<dyn YrsTextObservationDelegate>) -> Arc<YSubscription> {
-        let subscription = self
-            .0
-            .borrow_mut()
+        let mut text = self.inner();
+        let subscription = text
+            .as_mut()
             .observe(move |transaction, text_event| {
                 let delta = text_event.delta(transaction);
                 let result: Vec<YrsDelta> =
@@ -177,7 +204,7 @@ impl YrsText {
             }
         }).collect();
 
-        self.0.borrow_mut().apply_delta(tx, deltas);
+        self.inner().as_mut().apply_delta(tx, deltas);
     }
 
     /// Returns the text content as a list of diff chunks with formatting.
@@ -186,7 +213,7 @@ impl YrsText {
         let tx = transaction.transaction();
         let tx = tx.as_ref().unwrap();
 
-        let diffs: Vec<Diff<()>> = self.0.borrow().diff(tx, |_| ());
+        let diffs: Vec<Diff<()>> = self.inner().as_ref().diff(tx, |_| ());
         diffs.into_iter().map(|d| YrsDiff::from(&d)).collect()
     }
 }

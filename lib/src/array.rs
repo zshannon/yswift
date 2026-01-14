@@ -4,30 +4,58 @@ use crate::subscription::YSubscription;
 use crate::text::YrsText;
 use crate::transaction::YrsTransaction;
 use crate::{change::YrsChange, error::CodingError};
-use std::cell::RefCell;
+use parking_lot::ReentrantMutex;
+use std::cell::UnsafeCell;
 use std::fmt::Debug;
 use std::sync::Arc;
 use yrs::branch::Branch;
 use yrs::{Any, Array, ArrayRef, Observable, Out};
 
-pub(crate) struct YrsArray(RefCell<ArrayRef>);
+pub(crate) struct YrsArray(ReentrantMutex<UnsafeCell<ArrayRef>>);
 
+// Safe because ReentrantMutex provides proper thread synchronization.
 unsafe impl Send for YrsArray {}
 unsafe impl Sync for YrsArray {}
+
+/// A guard that holds the lock and provides access to the inner ArrayRef.
+pub(crate) struct ArrayRefGuard<'a> {
+    _guard: parking_lot::ReentrantMutexGuard<'a, UnsafeCell<ArrayRef>>,
+    ptr: *mut ArrayRef,
+}
+
+impl<'a> ArrayRefGuard<'a> {
+    pub(crate) fn as_ref(&self) -> &ArrayRef {
+        unsafe { &*self.ptr }
+    }
+
+    pub(crate) fn as_mut(&mut self) -> &mut ArrayRef {
+        unsafe { &mut *self.ptr }
+    }
+}
+
+impl YrsArray {
+    fn inner(&self) -> ArrayRefGuard<'_> {
+        let guard = self.0.lock();
+        let ptr = unsafe { (*self.0.data_ptr()).get() };
+        ArrayRefGuard { _guard: guard, ptr }
+    }
+}
 
 impl AsRef<Branch> for YrsArray {
     fn as_ref(&self) -> &Branch {
         //FIXME: after yrs v0.18 use logical references
-        let branch = &*self.0.borrow();
+        let guard = self.inner();
+        let branch = guard.as_ref();
         unsafe { std::mem::transmute(branch.as_ref()) }
     }
 }
 
 impl From<ArrayRef> for YrsArray {
     fn from(value: ArrayRef) -> Self {
-        YrsArray(RefCell::from(value))
+        YrsArray(ReentrantMutex::new(UnsafeCell::new(value)))
     }
 }
+
 pub(crate) trait YrsArrayEachDelegate: Send + Sync + Debug {
     fn call(&self, value: String);
 }
@@ -36,43 +64,10 @@ pub(crate) trait YrsArrayObservationDelegate: Send + Sync + Debug {
     fn call(&self, value: Vec<YrsChange>);
 }
 
-// unsafe impl Send for YrsArrayIterator {}
-// unsafe impl Sync for YrsArrayIterator {}
-
-// pub(crate) struct YrsArrayIterator {
-//     inner: RefCell<ArrayIter<&'static YrsTransaction, YrsTransaction>>,
-// }
-
-// impl YrsArrayIterator {
-//     pub(crate) fn next(&self) -> Option<String> {
-//         let val = self.inner.borrow_mut().next();
-
-//         match val {
-//             Some(val) => {
-//                 let mut buf = String::new();
-//                 if let Out::Any(any) = val {
-//                     any.to_json(&mut buf);
-//                     Some(buf)
-//                 } else {
-//                     // @TODO: fix silly handling, it will just call it with nil if casting fails
-//                     None
-//                 }
-//             }
-//             None => None,
-//         }
-//     }
-// }
-
 impl YrsArray {
-    // pub(crate) fn iter(&self, txn: &'static YrsTransaction) -> Arc<YrsArrayIterator> {
-    //     let arr = self.0.borrow();
-    //     Arc::new(YrsArrayIterator {
-    //         inner: RefCell::new(arr.iter(txn)),
-    //     })
-    // }
     pub(crate) fn raw_ptr(&self) -> YrsCollectionPtr {
-        let borrowed = self.0.borrow();
-        YrsCollectionPtr::from(borrowed.as_ref())
+        let guard = self.inner();
+        YrsCollectionPtr::from(guard.as_ref().as_ref())
     }
 
     pub(crate) fn each(
@@ -83,8 +78,8 @@ impl YrsArray {
         let tx = transaction.transaction();
         let tx = tx.as_ref().unwrap();
 
-        let arr = self.0.borrow();
-        arr.iter(tx).for_each(|val| {
+        let arr = self.inner();
+        arr.as_ref().iter(tx).for_each(|val| {
             let mut buf = String::new();
             if let Out::Any(any) = val {
                 any.to_json(&mut buf);
@@ -103,8 +98,8 @@ impl YrsArray {
     ) -> Result<String, CodingError> {
         let tx = transaction.transaction();
         let tx = tx.as_ref().unwrap();
-        let arr = self.0.borrow();
-        if let Some(value) = arr.get(tx, index) {
+        let arr = self.inner();
+        if let Some(value) = arr.as_ref().get(tx, index) {
             let mut buf = String::new();
             if let Out::Any(any) = value {
                 any.to_json(&mut buf);
@@ -124,8 +119,8 @@ impl YrsArray {
         let mut tx = transaction.transaction();
         let tx = tx.as_mut().unwrap();
 
-        let arr = self.0.borrow_mut();
-        arr.insert(tx, index, avalue);
+        let mut arr = self.inner();
+        arr.as_mut().insert(tx, index, avalue);
     }
 
     pub(crate) fn insert_range(
@@ -134,7 +129,7 @@ impl YrsArray {
         index: u32,
         values: Vec<String>,
     ) {
-        let arr = self.0.borrow_mut();
+        let mut arr = self.inner();
         let mut tx = transaction.transaction();
         let tx = tx.as_mut().unwrap();
 
@@ -143,15 +138,15 @@ impl YrsArray {
             .map(|value| Any::from_json(value.as_str()).unwrap())
             .collect();
 
-        arr.insert_range(tx, index, add_values)
+        arr.as_mut().insert_range(tx, index, add_values)
     }
 
     pub(crate) fn length(&self, transaction: &YrsTransaction) -> u32 {
-        let arr = self.0.borrow();
+        let arr = self.inner();
         let tx = transaction.transaction();
         let tx = tx.as_ref().unwrap();
 
-        arr.len(tx)
+        arr.as_ref().len(tx)
     }
 
     pub(crate) fn push_back(&self, transaction: &YrsTransaction, value: String) {
@@ -159,7 +154,7 @@ impl YrsArray {
         let mut tx = transaction.transaction();
         let tx = tx.as_mut().unwrap();
 
-        self.0.borrow_mut().push_back(tx, avalue);
+        self.inner().as_mut().push_back(tx, avalue);
     }
 
     pub(crate) fn push_front(&self, transaction: &YrsTransaction, value: String) {
@@ -168,30 +163,30 @@ impl YrsArray {
         let mut tx = transaction.transaction();
         let tx = tx.as_mut().unwrap();
 
-        let arr = self.0.borrow_mut();
-        arr.push_front(tx, avalue);
+        let mut arr = self.inner();
+        arr.as_mut().push_front(tx, avalue);
     }
 
     pub(crate) fn remove(&self, transaction: &YrsTransaction, index: u32) {
         let mut tx = transaction.transaction();
         let tx = tx.as_mut().unwrap();
 
-        let arr = self.0.borrow_mut();
-        arr.remove(tx, index)
+        let mut arr = self.inner();
+        arr.as_mut().remove(tx, index)
     }
 
     pub(crate) fn remove_range(&self, transaction: &YrsTransaction, index: u32, len: u32) {
         let mut tx = transaction.transaction();
         let tx = tx.as_mut().unwrap();
 
-        let arr = self.0.borrow_mut();
-        arr.remove_range(tx, index, len)
+        let mut arr = self.inner();
+        arr.as_mut().remove_range(tx, index, len)
     }
 
     pub(crate) fn observe(&self, delegate: Box<dyn YrsArrayObservationDelegate>) -> Arc<YSubscription> {
-        let subscription = self
-            .0
-            .borrow_mut()
+        let mut arr = self.inner();
+        let subscription = arr
+            .as_mut()
             .observe(move |transaction, text_event| {
                 let delta = text_event.delta(transaction);
                 let result: Vec<YrsChange> =
@@ -203,11 +198,11 @@ impl YrsArray {
     }
 
     pub(crate) fn to_a(&self, transaction: &YrsTransaction) -> Vec<String> {
-        let arr = self.0.borrow();
+        let arr = self.inner();
         let tx = transaction.transaction();
         let tx = tx.as_ref().unwrap();
 
-        let arr = arr
+        let arr = arr.as_ref()
             .iter(tx)
             .filter_map(|v| {
                 let mut buf = String::new();
@@ -234,9 +229,9 @@ impl YrsArray {
     ) -> Option<Arc<YrsDoc>> {
         let tx = transaction.transaction();
         let tx = tx.as_ref().unwrap();
-        let arr = self.0.borrow();
+        let arr = self.inner();
 
-        if let Some(Out::YDoc(doc)) = arr.get(tx, index) {
+        if let Some(Out::YDoc(doc)) = arr.as_ref().get(tx, index) {
             Some(Arc::new(YrsDoc::from_doc(doc)))
         } else {
             None
@@ -253,11 +248,11 @@ impl YrsArray {
     ) -> Arc<YrsDoc> {
         let mut tx = transaction.transaction();
         let tx = tx.as_mut().unwrap();
-        let arr = self.0.borrow_mut();
+        let mut arr = self.inner();
 
         // Clone the inner Doc and insert it
         let inner_doc = doc.inner().clone();
-        let inserted = arr.insert(tx, index, inner_doc);
+        let inserted = arr.as_mut().insert(tx, index, inner_doc);
         Arc::new(YrsDoc::from_doc(inserted))
     }
 
@@ -267,8 +262,8 @@ impl YrsArray {
     pub(crate) fn get_map(&self, transaction: &YrsTransaction, index: u32) -> Option<Arc<YrsMap>> {
         let tx = transaction.transaction();
         let tx = tx.as_ref().unwrap();
-        let arr = self.0.borrow();
-        if let Some(Out::YMap(nested)) = arr.get(tx, index) {
+        let arr = self.inner();
+        if let Some(Out::YMap(nested)) = arr.as_ref().get(tx, index) {
             Some(Arc::new(YrsMap::from(nested)))
         } else {
             None
@@ -279,8 +274,8 @@ impl YrsArray {
     pub(crate) fn get_array(&self, transaction: &YrsTransaction, index: u32) -> Option<Arc<YrsArray>> {
         let tx = transaction.transaction();
         let tx = tx.as_ref().unwrap();
-        let arr = self.0.borrow();
-        if let Some(Out::YArray(nested)) = arr.get(tx, index) {
+        let arr = self.inner();
+        if let Some(Out::YArray(nested)) = arr.as_ref().get(tx, index) {
             Some(Arc::new(YrsArray::from(nested)))
         } else {
             None
@@ -291,8 +286,8 @@ impl YrsArray {
     pub(crate) fn get_text(&self, transaction: &YrsTransaction, index: u32) -> Option<Arc<YrsText>> {
         let tx = transaction.transaction();
         let tx = tx.as_ref().unwrap();
-        let arr = self.0.borrow();
-        if let Some(Out::YText(nested)) = arr.get(tx, index) {
+        let arr = self.inner();
+        if let Some(Out::YText(nested)) = arr.as_ref().get(tx, index) {
             Some(Arc::new(YrsText::from(nested)))
         } else {
             None
@@ -303,8 +298,8 @@ impl YrsArray {
     pub(crate) fn is_undefined(&self, transaction: &YrsTransaction, index: u32) -> bool {
         let tx = transaction.transaction();
         let tx = tx.as_ref().unwrap();
-        let arr = self.0.borrow();
-        matches!(arr.get(tx, index), Some(Out::UndefinedRef(_)))
+        let arr = self.inner();
+        matches!(arr.as_ref().get(tx, index), Some(Out::UndefinedRef(_)))
     }
 
     /// Inserts an empty nested YMap at the specified index.
@@ -312,9 +307,9 @@ impl YrsArray {
         use yrs::{MapPrelim, MapRef};
         let mut tx = transaction.transaction();
         let tx = tx.as_mut().unwrap();
-        let arr = self.0.borrow_mut();
+        let mut arr = self.inner();
         let prelim: MapPrelim = Default::default();
-        let nested: MapRef = arr.insert(tx, index, prelim);
+        let nested: MapRef = arr.as_mut().insert(tx, index, prelim);
         Arc::new(YrsMap::from(nested))
     }
 
@@ -323,8 +318,8 @@ impl YrsArray {
         use yrs::ArrayPrelim;
         let mut tx = transaction.transaction();
         let tx = tx.as_mut().unwrap();
-        let arr = self.0.borrow_mut();
-        let nested: ArrayRef = arr.insert(tx, index, ArrayPrelim::default());
+        let mut arr = self.inner();
+        let nested: ArrayRef = arr.as_mut().insert(tx, index, ArrayPrelim::default());
         Arc::new(YrsArray::from(nested))
     }
 
@@ -333,8 +328,8 @@ impl YrsArray {
         use yrs::{TextPrelim, TextRef};
         let mut tx = transaction.transaction();
         let tx = tx.as_mut().unwrap();
-        let arr = self.0.borrow_mut();
-        let nested: TextRef = arr.insert(tx, index, TextPrelim::new(""));
+        let mut arr = self.inner();
+        let nested: TextRef = arr.as_mut().insert(tx, index, TextPrelim::new(""));
         Arc::new(YrsText::from(nested))
     }
 
@@ -343,9 +338,9 @@ impl YrsArray {
         use yrs::{MapPrelim, MapRef};
         let mut tx = transaction.transaction();
         let tx = tx.as_mut().unwrap();
-        let arr = self.0.borrow_mut();
+        let mut arr = self.inner();
         let prelim: MapPrelim = Default::default();
-        let nested: MapRef = arr.push_back(tx, prelim);
+        let nested: MapRef = arr.as_mut().push_back(tx, prelim);
         Arc::new(YrsMap::from(nested))
     }
 
@@ -354,8 +349,8 @@ impl YrsArray {
         use yrs::ArrayPrelim;
         let mut tx = transaction.transaction();
         let tx = tx.as_mut().unwrap();
-        let arr = self.0.borrow_mut();
-        let nested: ArrayRef = arr.push_back(tx, ArrayPrelim::default());
+        let mut arr = self.inner();
+        let nested: ArrayRef = arr.as_mut().push_back(tx, ArrayPrelim::default());
         Arc::new(YrsArray::from(nested))
     }
 
@@ -364,8 +359,8 @@ impl YrsArray {
         use yrs::{TextPrelim, TextRef};
         let mut tx = transaction.transaction();
         let tx = tx.as_mut().unwrap();
-        let arr = self.0.borrow_mut();
-        let nested: TextRef = arr.push_back(tx, TextPrelim::new(""));
+        let mut arr = self.inner();
+        let nested: TextRef = arr.as_mut().push_back(tx, TextPrelim::new(""));
         Arc::new(YrsText::from(nested))
     }
 
@@ -373,8 +368,8 @@ impl YrsArray {
     pub(crate) fn move_to(&self, transaction: &YrsTransaction, source: u32, target: u32) {
         let mut tx = transaction.transaction();
         let tx = tx.as_mut().unwrap();
-        let arr = self.0.borrow_mut();
-        arr.move_to(tx, source, target);
+        let mut arr = self.inner();
+        arr.as_mut().move_to(tx, source, target);
     }
 
     /// Moves range of elements to target index.
@@ -388,7 +383,7 @@ impl YrsArray {
         use yrs::Assoc;
         let mut tx = transaction.transaction();
         let tx = tx.as_mut().unwrap();
-        let arr = self.0.borrow_mut();
-        arr.move_range_to(tx, start, Assoc::After, end, Assoc::Before, target);
+        let mut arr = self.inner();
+        arr.as_mut().move_range_to(tx, start, Assoc::After, end, Assoc::Before, target);
     }
 }

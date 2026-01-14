@@ -911,6 +911,220 @@ final class YMapTests: XCTestCase {
 
         XCTAssertEqual(result, "test")
     }
+
+    // MARK: - Regression Tests
+
+    /// Tests that applying an update while observeAsync is active doesn't panic.
+    /// This reproduces a bug where transactionApplyUpdate holds a RefCell borrow
+    /// while triggering observers, causing a panic if observers access the transaction.
+    func test_applyUpdateWithActiveObserver_doesNotPanic() async throws {
+        // Create source document with nested structure (like VersionedQuantumStore)
+        let sourceDoc = YDocument()
+        let sourceRoot: YMap<Int> = sourceDoc.getOrCreateMap(named: "root")
+        await sourceDoc.transact { txn in
+            let stateMap: YMap<Int> = sourceRoot.insertMap(forKey: "state", transaction: txn)
+            stateMap.updateValue(0, forKey: "count", transaction: txn)
+        }
+
+        // Encode the source document state
+        let update: [UInt8] = await sourceDoc.transact { txn in
+            txn.transactionEncodeStateAsUpdate()
+        }
+
+        // Create target document
+        let targetDoc = YDocument()
+        let targetRoot: YMap<Int> = targetDoc.getOrCreateMap(named: "root")
+
+        // Set up async observer on root map BEFORE applying update
+        var observedChanges: [[YMapChange<Int>]] = []
+        let observerReady = AsyncStream.makeStream(of: Void.self)
+        let observerTask = Task {
+            var first = true
+            for await changes in targetRoot.observeAsync() {
+                if first {
+                    observerReady.continuation.yield()
+                    first = false
+                }
+                observedChanges.append(changes)
+            }
+        }
+
+        // Apply the update - this should trigger the observer
+        // The bug was: apply_update triggers observers while holding a RefCell borrow
+        await targetDoc.transact { txn in
+            try? txn.transactionApplyUpdate(update: update)
+        }
+
+        // Give observer time to process
+        try await Task.sleep(for: .milliseconds(50))
+
+        // Cancel observer task
+        observerTask.cancel()
+
+        // Verify the nested structure was synced
+        let syncedStateMap: YMap<Int>? = await targetDoc.transact { txn in
+            targetRoot.getMap(forKey: "state", transaction: txn)
+        }
+        XCTAssertNotNil(syncedStateMap)
+    }
+
+    /// Test that replicates the exact pattern from VersionedQuantumStore:
+    /// 1. Apply local diffs to document
+    /// 2. Set up observer on root map
+    /// 3. Observer triggers and tries to read state
+    /// 4. Meanwhile, other transacts are happening
+    func test_observerReadStateWhileTransacting_doesNotPanic() async throws {
+        // Create source document with nested structure
+        let sourceDoc = YDocument()
+        let sourceRoot: YMap<Int> = sourceDoc.getOrCreateMap(named: "root")
+        await sourceDoc.transact { txn in
+            let stateMap: YMap<Int> = sourceRoot.insertMap(forKey: "state", transaction: txn)
+            stateMap.updateValue(0, forKey: "count", transaction: txn)
+        }
+        let initialUpdate: [UInt8] = await sourceDoc.transact { txn in
+            txn.transactionEncodeStateAsUpdate()
+        }
+
+        // Create target document
+        let targetDoc = YDocument()
+
+        // Apply initial update FIRST (before getting root map, like runStream does)
+        await targetDoc.transact { txn in
+            try? txn.transactionApplyUpdate(update: initialUpdate)
+        }
+
+        // Now get the root map
+        let targetRoot: YMap<Int> = targetDoc.getOrCreateMap(named: "root")
+
+        // Track when observer fires and reads state
+        var stateSnapshots: [[String: Int]] = []
+        let observerTask = Task {
+            for await _ in targetRoot.observeAsync() {
+                // This pattern is from VersionedQuantumStore:
+                // Observer fires, sleeps 1ms, then reads state
+                try? await Task.sleep(for: .milliseconds(1))
+                let state = await targetRoot.toMapAsync()
+                stateSnapshots.append(state)
+                if stateSnapshots.count >= 2 {
+                    break
+                }
+            }
+        }
+
+        // Give observer time to set up
+        try await Task.sleep(for: .milliseconds(10))
+
+        // Now do multiple transacts concurrently with the observer
+        // This simulates what happens in set() + commit()
+        for i in 1...3 {
+            // Create update with new count value
+            let updateDoc = YDocument()
+            await updateDoc.transact { txn in
+                try? txn.transactionApplyUpdate(update: initialUpdate)
+            }
+            let updateRoot: YMap<Int> = updateDoc.getOrCreateMap(named: "root")
+            if let stateMap: YMap<Int> = await updateDoc.transact({ txn in
+                updateRoot.getMap(forKey: "state", transaction: txn)
+            }) {
+                await updateDoc.transact { txn in
+                    stateMap.updateValue(i * 10, forKey: "count", transaction: txn)
+                }
+            }
+            let update: [UInt8] = await updateDoc.transact { txn in
+                txn.transactionEncodeStateAsUpdate()
+            }
+
+            // Apply update to target - may trigger observer
+            await targetDoc.transact { txn in
+                try? txn.transactionApplyUpdate(update: update)
+            }
+
+            // Also do an immediate read (like commit() does for state vector)
+            _ = await targetDoc.transact { txn in
+                txn.transactionStateVector()
+            }
+        }
+
+        // Give observer time to process, then cancel
+        try await Task.sleep(for: .milliseconds(100))
+        observerTask.cancel()
+
+        // Test passes if we got here without panic or deadlock
+        // Observer may or may not have captured states depending on timing
+    }
+
+    /// Tests observeAsync with updates applied while consumer is actively iterating.
+    /// This verifies that applying updates with an active observer doesn't panic or deadlock.
+    func test_applyMultipleUpdatesWithActiveAsyncObserver() async throws {
+        // Create source doc with nested structure
+        let sourceDoc = YDocument()
+        let sourceRoot: YMap<Int> = sourceDoc.getOrCreateMap(named: "root")
+        await sourceDoc.transact { txn in
+            let stateMap: YMap<Int> = sourceRoot.insertMap(forKey: "state", transaction: txn)
+            stateMap.updateValue(0, forKey: "count", transaction: txn)
+        }
+        let initialUpdate: [UInt8] = await sourceDoc.transact { txn in
+            txn.transactionEncodeStateAsUpdate()
+        }
+
+        // Create target document and apply initial structure
+        let targetDoc = YDocument()
+        await targetDoc.transact { txn in
+            try? txn.transactionApplyUpdate(update: initialUpdate)
+        }
+        let targetRoot: YMap<Int> = targetDoc.getOrCreateMap(named: "root")
+
+        // Set up observer that reads state on each change
+        var capturedStates: [[String: Int]] = []
+
+        let observerTask = Task {
+            for await _ in targetRoot.observeAsync() {
+                // Reading state from within async observer should be safe
+                let state = await targetRoot.toMapAsync()
+                capturedStates.append(state)
+            }
+        }
+
+        // Give observer time to set up
+        try await Task.sleep(for: .milliseconds(10))
+
+        // Create update docs and apply them
+        for i in 1...3 {
+            // Create an update that modifies the nested state
+            let updateDoc = YDocument()
+            await updateDoc.transact { txn in
+                try? txn.transactionApplyUpdate(update: initialUpdate)
+            }
+            let updateRoot: YMap<Int> = updateDoc.getOrCreateMap(named: "root")
+            let stateMap: YMap<Int>? = await updateDoc.transact { txn in
+                updateRoot.getMap(forKey: "state", transaction: txn)
+            }
+
+            if let stateMap = stateMap {
+                await updateDoc.transact { txn in
+                    stateMap.updateValue(i * 10, forKey: "count", transaction: txn)
+                }
+            }
+
+            let update: [UInt8] = await updateDoc.transact { txn in
+                txn.transactionEncodeStateAsUpdate()
+            }
+
+            // Apply update to target - this may trigger observers
+            await targetDoc.transact { txn in
+                try? txn.transactionApplyUpdate(update: update)
+            }
+
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        // Give observer some time to process, then cancel
+        try await Task.sleep(for: .milliseconds(50))
+        observerTask.cancel()
+
+        // Test passes if we got here without panic or deadlock
+        // Observer may or may not have captured states depending on timing
+    }
 }
 
 enum TestError: Error {

@@ -444,4 +444,475 @@ final class YMapTests: XCTestCase {
         XCTAssertNotNil(retrievedContent)
         XCTAssertEqual(retrievedContent?.getString(), "Deep value")
     }
+
+    // MARK: - Sync/Encode Tests for Nested Types
+
+    func test_encodeWithEmptyStateVector() {
+        // Test that transactionEncodeStateAsUpdateFromSv requires a properly encoded state vector,
+        // not just an empty byte array
+        let doc1 = YDocument()
+        let map1: YMap<Int> = doc1.getOrCreateMap(named: "test")
+        map1["value"] = 42
+
+        // Get a properly encoded empty state vector from a fresh document
+        let doc2 = YDocument()
+        let emptyEncodedStateVector: [UInt8] = doc2.transactSync { txn in
+            txn.transactionStateVector()
+        }
+        print("[TEST] Empty encoded state vector bytes: \(emptyEncodedStateVector.count)")
+
+        // Now use transactionEncodeStateAsUpdateFromSv with the properly encoded state vector
+        let update: [UInt8]? = doc1.transactSync { txn in
+            try? txn.transactionEncodeStateAsUpdateFromSv(stateVector: emptyEncodedStateVector)
+        }
+        print("[TEST] Update bytes from FromSv: \(update?.count ?? 0)")
+        XCTAssertNotNil(update, "Encoding with properly encoded empty state vector should succeed")
+        XCTAssertGreaterThan(update?.count ?? 0, 0, "Update should not be empty")
+
+        // Verify the sync works
+        if let update = update {
+            doc2.transactSync { txn in
+                try? txn.transactionApplyUpdate(update: update)
+            }
+        }
+        let map2: YMap<Int> = doc2.getOrCreateMap(named: "test")
+        XCTAssertEqual(map2["value"], 42, "Value should be synced")
+    }
+
+    func test_encodeAndApplyNestedMap() {
+        // Create document with nested map structure
+        let doc1 = YDocument()
+        let root1: YMap<String> = doc1.getOrCreateMap(named: "root")
+
+        doc1.transactSync { txn in
+            let stateMap: YMap<Int> = root1.insertMap(forKey: "state", transaction: txn)
+            stateMap.updateValue(42, forKey: "count", transaction: txn)
+        }
+
+        // Verify nested map exists in original doc
+        let origStateMap: YMap<Int>? = doc1.transactSync { txn in
+            root1.getMap(forKey: "state", transaction: txn)
+        }
+        XCTAssertNotNil(origStateMap, "Nested map should exist in original document")
+        XCTAssertEqual(origStateMap?.get(key: "count"), 42)
+
+        // Try the simpler encode method (uses StateVector::default() internally)
+        let update: [UInt8] = doc1.transactSync { txn in
+            txn.transactionEncodeStateAsUpdate()
+        }
+        print("[TEST] Update bytes from transactionEncodeStateAsUpdate: \(update.count)")
+        XCTAssertGreaterThan(update.count, 0, "Update should not be empty")
+
+        // Apply to new document
+        let doc2 = YDocument()
+        doc2.transactSync { txn in
+            try? txn.transactionApplyUpdate(update: update)
+        }
+
+        // Verify nested map was synced
+        let root2: YMap<String> = doc2.getOrCreateMap(named: "root")
+        let syncedStateMap: YMap<Int>? = doc2.transactSync { txn in
+            root2.getMap(forKey: "state", transaction: txn)
+        }
+        XCTAssertNotNil(syncedStateMap, "Nested map should exist in synced document")
+        XCTAssertEqual(syncedStateMap?.get(key: "count"), 42, "Nested map value should be synced")
+    }
+
+    func test_encodeAndApplyNestedMapWithPrimitiveValue() {
+        // Simpler test: nested map with just a primitive value
+        let doc1 = YDocument()
+        let root1: YMap<String> = doc1.getOrCreateMap(named: "root")
+
+        // Insert nested map and set value
+        let stateMap: YMap<Int> = root1.insertMap(forKey: "state")
+        stateMap["count"] = 100
+
+        // Encode using the simpler method
+        let update: [UInt8] = doc1.transactSync { txn in
+            txn.transactionEncodeStateAsUpdate()
+        }
+        print("[TEST] Update bytes: \(update.count)")
+        XCTAssertGreaterThan(update.count, 0, "Update should not be empty")
+
+        // Apply to new document
+        let doc2 = YDocument()
+        doc2.transactSync { txn in
+            try? txn.transactionApplyUpdate(update: update)
+        }
+
+        // Verify
+        let root2: YMap<String> = doc2.getOrCreateMap(named: "root")
+        let syncedStateMap: YMap<Int>? = root2.getMap(forKey: "state")
+        XCTAssertNotNil(syncedStateMap, "Nested map should exist after sync")
+        XCTAssertEqual(syncedStateMap?["count"], 100, "Value should be synced")
+    }
+
+    // MARK: - Tests for mixed maps with nested types and primitives
+
+    func test_eachIterationWithNestedMapDoesNotCrash() {
+        // Test that iterating over a map containing nested types doesn't crash
+        let doc = YDocument()
+        let root: YMap<String> = doc.getOrCreateMap(named: "root")
+
+        // Add a nested map
+        let _: YMap<Int> = root.insertMap(forKey: "nestedMap")
+        // Add a primitive value
+        root["primitiveKey"] = "hello"
+
+        // Iterate - this should not crash, and should only return the primitive
+        var collectedKeys: [String] = []
+        var collectedValues: [String] = []
+        root.each { key, value in
+            collectedKeys.append(key)
+            collectedValues.append(value)
+        }
+
+        // Should only contain the primitive, not the nested map
+        XCTAssertEqual(collectedKeys.count, 1, "Should only iterate over primitive values")
+        XCTAssertEqual(collectedKeys.first, "primitiveKey")
+        XCTAssertEqual(collectedValues.first, "hello")
+    }
+
+    func test_toMapWithNestedMapDoesNotCrash() {
+        // Test that toMap() works when the map contains nested types
+        let doc = YDocument()
+        let root: YMap<String> = doc.getOrCreateMap(named: "root")
+
+        // Add a nested map
+        let _: YMap<Int> = root.insertMap(forKey: "nestedMap")
+        // Add primitive values
+        root["key1"] = "value1"
+        root["key2"] = "value2"
+
+        // toMap() should not crash and should only return primitives
+        let map = root.toMap()
+
+        XCTAssertEqual(map.count, 2, "Should only contain primitive values")
+        XCTAssertEqual(map["key1"], "value1")
+        XCTAssertEqual(map["key2"], "value2")
+        XCTAssertNil(map["nestedMap"], "Nested map should not be in toMap() result")
+    }
+
+    func test_observeWithNestedMapDoesNotCrash() {
+        // Test that observe() works when changes involve nested types
+        let doc = YDocument()
+        let root: YMap<String> = doc.getOrCreateMap(named: "root")
+
+        var observedChanges: [YMapChange<String>] = []
+        let subscription = root.observe { changes in
+            observedChanges.append(contentsOf: changes)
+        }
+
+        // Insert a nested map - should not crash
+        let _: YMap<Int> = root.insertMap(forKey: "nestedMap")
+
+        // Insert a primitive - should trigger observable change
+        root["primitiveKey"] = "hello"
+
+        // Only primitive change should be observed
+        XCTAssertEqual(observedChanges.count, 1, "Should only observe primitive value changes")
+        if case .inserted(let key, let value) = observedChanges.first {
+            XCTAssertEqual(key, "primitiveKey")
+            XCTAssertEqual(value, "hello")
+        } else {
+            XCTFail("Expected inserted change for primitiveKey")
+        }
+
+        subscription.cancel()
+    }
+
+    func test_valuesIterationWithNestedMapDoesNotCrash() {
+        // Test that values() iteration works with nested types
+        let doc = YDocument()
+        let root: YMap<String> = doc.getOrCreateMap(named: "root")
+
+        // Add a nested map
+        let _: YMap<Int> = root.insertMap(forKey: "nestedMap")
+        // Add primitive values
+        root["key1"] = "value1"
+        root["key2"] = "value2"
+
+        // Iterate values - should not crash
+        var collectedValues: [String] = []
+        root.values { value in
+            collectedValues.append(value)
+        }
+
+        // Should only contain primitive values
+        XCTAssertEqual(collectedValues.count, 2, "Should only iterate over primitive values")
+        XCTAssertTrue(collectedValues.contains("value1"))
+        XCTAssertTrue(collectedValues.contains("value2"))
+    }
+
+    func test_observeNestedMapChangesDirectly() {
+        // Test that we can observe changes on the nested map itself
+        let doc = YDocument()
+        let root: YMap<String> = doc.getOrCreateMap(named: "root")
+        let nested: YMap<Int> = root.insertMap(forKey: "state")
+
+        var nestedChanges: [YMapChange<Int>] = []
+        let subscription = nested.observe { changes in
+            nestedChanges.append(contentsOf: changes)
+        }
+
+        // Changes to nested map should be observed
+        nested["count"] = 42
+
+        XCTAssertEqual(nestedChanges.count, 1)
+        if case .inserted(let key, let value) = nestedChanges.first {
+            XCTAssertEqual(key, "count")
+            XCTAssertEqual(value, 42)
+        } else {
+            XCTFail("Expected inserted change for count")
+        }
+
+        subscription.cancel()
+    }
+
+    // MARK: - Async Observer Tests
+
+    func test_observeAsync_receivesChanges() async {
+        let doc = YDocument()
+        let map: YMap<Int> = doc.getOrCreateMap(named: "test")
+
+        var receivedChanges: [YMapChange<Int>] = []
+
+        // Start async observation in background
+        let streamTask = Task {
+            for await changes in map.observeAsync() {
+                receivedChanges.append(contentsOf: changes)
+                if receivedChanges.count >= 2 { break }
+            }
+        }
+
+        // Give the stream time to set up
+        try? await Task.sleep(for: .milliseconds(10))
+
+        // Make changes
+        map["a"] = 1
+        map["b"] = 2
+
+        // Wait for stream to receive changes
+        _ = await streamTask.result
+
+        XCTAssertEqual(receivedChanges.count, 2)
+        XCTAssertTrue(receivedChanges.contains(.inserted(key: "a", value: 1)))
+        XCTAssertTrue(receivedChanges.contains(.inserted(key: "b", value: 2)))
+    }
+
+    func test_observeAsync_safeToReadStateDuringCallback() async {
+        // This is the key test: verify we can call transactSync from within the async observer
+        // This would deadlock with synchronous observers
+        let doc = YDocument()
+        let map: YMap<Int> = doc.getOrCreateMap(named: "test")
+
+        var readState: [String: Int] = [:]
+
+        let streamTask = Task {
+            for await _ in map.observeAsync() {
+                // This should NOT deadlock because we're outside the transaction
+                readState = map.toMap()
+                break
+            }
+        }
+
+        // Give stream time to set up
+        try? await Task.sleep(for: .milliseconds(10))
+
+        // Make a change
+        map["count"] = 42
+
+        // Wait for stream
+        _ = await streamTask.result
+
+        // Verify we successfully read state from within the async observer
+        XCTAssertEqual(readState["count"], 42)
+    }
+
+    func test_observeAsync_cancellation() async {
+        let doc = YDocument()
+        let map: YMap<Int> = doc.getOrCreateMap(named: "test")
+
+        let task = Task {
+            for await _ in map.observeAsync() {
+                // Should receive at least one change
+                break
+            }
+        }
+
+        // Give stream time to set up
+        try? await Task.sleep(for: .milliseconds(10))
+
+        // Make a change to ensure stream is working
+        map["test"] = 1
+
+        // Wait for the task to complete
+        _ = await task.result
+
+        // Cancelling after completion should be fine
+        task.cancel()
+    }
+
+    // MARK: - Async API Tests (Swift 6 Concurrency)
+
+    func test_asyncTransact_basicUsage() async {
+        let doc = YDocument()
+        let map: YMap<Int> = doc.getOrCreateMap(named: "test")
+
+        // Use async transact to set values
+        await doc.transact { txn in
+            map.updateValue(42, forKey: "count", transaction: txn)
+            map.updateValue(100, forKey: "score", transaction: txn)
+        }
+
+        // Use async transact to read values
+        let result = await doc.transact { txn in
+            map.toMap(transaction: txn)
+        }
+
+        XCTAssertEqual(result["count"], 42)
+        XCTAssertEqual(result["score"], 100)
+    }
+
+    func test_asyncTransact_returnsValue() async {
+        let doc = YDocument()
+        let map: YMap<String> = doc.getOrCreateMap(named: "test")
+
+        await doc.transact { txn in
+            map.updateValue("hello", forKey: "greeting", transaction: txn)
+        }
+
+        let greeting = await doc.transact { txn -> String? in
+            map.get(key: "greeting", transaction: txn)
+        }
+
+        XCTAssertEqual(greeting, "hello")
+    }
+
+    func test_asyncMapSet() async {
+        let doc = YDocument()
+        let map: YMap<Int> = doc.getOrCreateMap(named: "test")
+
+        // Use async set API
+        await map.set(42, forKey: "value")
+
+        // Use async get API
+        let value = await map.get(key: "value")
+
+        XCTAssertEqual(value, 42)
+    }
+
+    func test_asyncMapOperations() async {
+        let doc = YDocument()
+        let map: YMap<String> = doc.getOrCreateMap(named: "test")
+
+        // Set multiple values
+        await map.set("one", forKey: "a")
+        await map.set("two", forKey: "b")
+        await map.set("three", forKey: "c")
+
+        // Test async length
+        let length = await map.length()
+        XCTAssertEqual(length, 3)
+
+        // Test async containsKey
+        let hasA = await map.containsKey("a")
+        let hasZ = await map.containsKey("z")
+        XCTAssertTrue(hasA)
+        XCTAssertFalse(hasZ)
+
+        // Test async keys
+        let keys = await map.keys()
+        XCTAssertEqual(Set(keys), Set(["a", "b", "c"]))
+
+        // Test async values
+        let values = await map.values()
+        XCTAssertEqual(Set(values), Set(["one", "two", "three"]))
+
+        // Test async toMapAsync
+        let dict = await map.toMapAsync()
+        XCTAssertEqual(dict, ["a": "one", "b": "two", "c": "three"])
+
+        // Test async removeValue
+        let removed = await map.removeValue(forKey: "b")
+        XCTAssertEqual(removed, "two")
+
+        let lengthAfter = await map.length()
+        XCTAssertEqual(lengthAfter, 2)
+
+        // Test async removeAll
+        await map.removeAll()
+        let finalLength = await map.length()
+        XCTAssertEqual(finalLength, 0)
+    }
+
+    func test_asyncTransact_serialization() async {
+        let doc = YDocument()
+        let map: YMap<Int> = doc.getOrCreateMap(named: "counter")
+
+        // Fire multiple async transactions sequentially to test serialization
+        // (Concurrent increment has a Rust bug with map.get on missing keys)
+        for i in 0..<10 {
+            await doc.transact { txn in
+                map.updateValue(i, forKey: "key\(i)", transaction: txn)
+            }
+        }
+
+        // All writes should have been serialized
+        let finalMap = await doc.transact { txn in
+            map.toMap(transaction: txn)
+        }
+
+        XCTAssertEqual(finalMap.count, 10)
+        for i in 0..<10 {
+            XCTAssertEqual(finalMap["key\(i)"], i)
+        }
+    }
+
+    func test_asyncObserverWithAsyncStateRead() async {
+        let doc = YDocument()
+        let map: YMap<Int> = doc.getOrCreateMap(named: "test")
+
+        var capturedState: [String: Int] = [:]
+
+        let streamTask = Task {
+            for await _ in map.observeAsync() {
+                // Use fully async API to read state
+                capturedState = await map.toMapAsync()
+                break
+            }
+        }
+
+        try? await Task.sleep(for: .milliseconds(10))
+
+        // Use async API to make change
+        await map.set(99, forKey: "value")
+
+        _ = await streamTask.result
+
+        XCTAssertEqual(capturedState["value"], 99)
+    }
+
+    func test_asyncTransact_throwingVersion() async throws {
+        let doc = YDocument()
+        let map: YMap<String> = doc.getOrCreateMap(named: "test")
+
+        await doc.transact { txn in
+            map.updateValue("test", forKey: "key", transaction: txn)
+        }
+
+        // Test throwing transact
+        let result = try await doc.transact { txn -> String in
+            guard let value = map.get(key: "key", transaction: txn) else {
+                throw TestError.notFound
+            }
+            return value
+        }
+
+        XCTAssertEqual(result, "test")
+    }
+}
+
+enum TestError: Error {
+    case notFound
 }

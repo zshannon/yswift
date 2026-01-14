@@ -5,34 +5,37 @@ A type that wraps all Y-CRDT shared data types, and provides transactional inter
 ## Overview
 
 A `YDocument` tracks and coordinates updates to Y-CRDT shared data types, such as ``YSwift/YText``, ``YSwift/YArray``, and ``YSwift/YMap``.
-Make any changes to shared data types within a document within a transaction, such as ``YSwift/YDocument/transactSync(origin:_:)``.
+Make any changes to shared data types within a document within a transaction using ``YSwift/YDocument/transact(origin:_:)-1tadr``.
 
 Interact with other copies of the shared data types by synchronizing documents.
 
 To synchronize a remote document with a local one:
 
 1. Retrieve the current state of remote document from within a transaction:
-```
-let remoteState = remoteDocument.transactSync { txn in
+```swift
+let remoteState = await remoteDocument.transact { txn in
     txn.transactionStateVector()
 }
 ```
 
 2. Use the remote state to calculate a difference from the local document:
-```
-let updateRemote = localDocument.transactSync { txn in
+```swift
+let updateRemote = await localDocument.transact { txn in
     localDocument.diff(txn: txn, from: remoteState)
 }
 ```
 
 3. Apply the difference to the remote document within a transaction:
-```
-remoteDocument.transactSync { txn in
+```swift
+await remoteDocument.transact { txn in
     try! txn.transactionApplyUpdate(update: updateRemote)
 }
 ```
 
 For a more detailed example of synchronizing a document, see <doc:SynchronizingDocuments>.
+
+> Important: YSwift provides parallel sync and async APIs. The async APIs (using Swift concurrency) are preferred.
+> The sync APIs are deprecated and will be removed in a future version. Do not mix sync and async APIs on the same document.
 
 ## Topics
 
@@ -70,12 +73,13 @@ let subdoc = YDocument(options: YDocumentOptions(guid: "child-doc"))
 let array: YArray<String> = parentDoc.getOrCreateArray(named: "docs")
 
 // Insert subdoc into parent
-parentDoc.transactSync { txn in
+await parentDoc.transact { txn in
     array.insertSubdoc(at: 0, subdoc, transaction: txn)
 }
 
-// Retrieve subdoc
-let retrieved = array.getSubdoc(at: 0)
+// Retrieve subdocs asynchronously
+let subdocs = await parentDoc.subdocsAsync()
+let guids = await parentDoc.subdocGuidsAsync()
 ```
 
 - ``YSwift/YDocument/init(options:)``
@@ -100,13 +104,13 @@ Query nested document structures using JSON path syntax:
 ```swift
 let doc = YDocument()
 let users: YArray<String> = doc.getOrCreateArray(named: "users")
-doc.transactSync { txn in
+await doc.transact { txn in
     users.append("{\"name\":\"Alice\"}", transaction: txn)
     users.append("{\"name\":\"Bob\"}", transaction: txn)
 }
 
-// Query all users
-let results = try doc.query("$.users[*]")
+// Query all users asynchronously
+let results = try await doc.queryAsync("$.users[*]")
 
 // Supported syntax:
 // $.field      - Access field
@@ -116,4 +120,5 @@ let results = try doc.query("$.users[*]")
 // $[1:3]       - Array slice
 ```
 
+- ``YSwift/YDocument/queryAsync(_:)``
 - ``YSwift/YDocument/query(_:transaction:)``

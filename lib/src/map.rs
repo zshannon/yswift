@@ -1,7 +1,7 @@
 use crate::array::YrsArray;
 use crate::doc::{YrsCollectionPtr, YrsDoc};
 use crate::error::CodingError;
-use crate::mapchange::{YrsEntryChange, YrsMapChange};
+use crate::mapchange::{try_from_entry_change, YrsMapChange};
 use crate::subscription::YSubscription;
 use crate::text::YrsText;
 use crate::transaction::YrsTransaction;
@@ -229,14 +229,15 @@ impl YrsMap {
             // `Item`, which can potentially contain a list of values within it.
             // In practice, it appears to contains a single value for this usage of it.
             value_list.iter().for_each(|val_in_list| {
-                let mut buf = String::new();
+                // Only call delegate for JSON-serializable values (Out::Any).
+                // Skip nested shared types (YMap, YArray, YText, YDoc, etc.) -
+                // these should be accessed via dedicated get_map/get_array/get_text methods.
                 if let Out::Any(any) = val_in_list {
+                    let mut buf = String::new();
                     any.to_json(&mut buf);
                     delegate.call(buf);
-                } else {
-                    // @TODO: fix silly handling, it will just call with empty string if casting fails
-                    delegate.call(buf);
                 }
+                // Silently skip non-Any values (nested shared types)
             });
         });
     }
@@ -261,14 +262,16 @@ impl YrsMap {
             // we'll pass the key value (String) straight through to the delegate,
             // but do the extra work to convert Value to a JSON string for decoding
             // on the far side of the language binding - or at least try to.
-            let mut buf = String::new();
+            //
+            // Only call delegate for JSON-serializable values (Out::Any).
+            // Skip nested shared types (YMap, YArray, YText, YDoc, etc.) -
+            // these should be accessed via dedicated get_map/get_array/get_text methods.
             if let Out::Any(any) = key_value_pair.1 {
+                let mut buf = String::new();
                 any.to_json(&mut buf);
                 delegate.call(key_value_pair.0.to_string(), buf);
-            } else {
-                // @TODO: fix silly handling, it will just call with empty string if casting fails
-                delegate.call(key_value_pair.0.to_string(), buf);
             }
+            // Silently skip non-Any values (nested shared types)
         });
     }
 
@@ -278,12 +281,10 @@ impl YrsMap {
             .borrow_mut()
             .observe(move |transaction, map_event| {
                 let delta = map_event.keys(transaction);
+                // Filter out nested shared types (YMap, YArray, YText, YDoc) which return None
                 let result: Vec<YrsMapChange> = delta
                     .iter()
-                    .map(|val| YrsMapChange {
-                        key: val.0.to_string(),
-                        change: YrsEntryChange::from(val.1),
-                    })
+                    .filter_map(|val| try_from_entry_change(val.0, val.1))
                     .collect();
                 delegate.call(result)
             });

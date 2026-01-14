@@ -63,6 +63,7 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-docc-plugin", from: "1.1.0"),
+        .package(url: "https://github.com/mattmassicotte/Queue", from: "0.2.1"),
     ],
     targets: [
         FFIbinaryTarget,
@@ -73,7 +74,10 @@ let package = Package(
         ),
         .target(
             name: "YSwift",
-            dependencies: ["Yniffi"],
+            dependencies: [
+                "Yniffi",
+                .product(name: "Queue", package: "Queue"),
+            ],
             swiftSettings: globalSwiftSettings
         ),
         .testTarget(

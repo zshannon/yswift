@@ -427,4 +427,128 @@ class YArrayTests: XCTestCase {
         XCTAssertNil(arr.getArray(at: 0) as YArray<Int>?)
         XCTAssertNil(arr.getText(at: 0))
     }
+
+    // MARK: - Async API Tests
+
+    func test_asyncAppend() async {
+        let doc = YDocument()
+        let arr: YArray<Int> = doc.getOrCreateArray(named: "test")
+
+        await arr.append(1)
+        await arr.append(2)
+        await arr.append(3)
+
+        let result = await arr.toArrayAsync()
+        XCTAssertEqual(result, [1, 2, 3])
+    }
+
+    func test_asyncInsert() async {
+        let doc = YDocument()
+        let arr: YArray<String> = doc.getOrCreateArray(named: "test")
+
+        await arr.append("first")
+        await arr.append("third")
+        await arr.insert(at: 1, value: "second")
+
+        let result = await arr.toArrayAsync()
+        XCTAssertEqual(result, ["first", "second", "third"])
+    }
+
+    func test_asyncInsertArray() async {
+        let doc = YDocument()
+        let arr: YArray<Int> = doc.getOrCreateArray(named: "test")
+
+        await arr.insertArray(at: 0, values: [1, 2, 3, 4, 5])
+
+        let result = await arr.toArrayAsync()
+        XCTAssertEqual(result, [1, 2, 3, 4, 5])
+    }
+
+    func test_asyncPrepend() async {
+        let doc = YDocument()
+        let arr: YArray<String> = doc.getOrCreateArray(named: "test")
+
+        await arr.append("second")
+        await arr.prepend("first")
+
+        let result = await arr.toArrayAsync()
+        XCTAssertEqual(result, ["first", "second"])
+    }
+
+    func test_asyncRemove() async {
+        let doc = YDocument()
+        let arr: YArray<Int> = doc.getOrCreateArray(named: "test")
+
+        await arr.insertArray(at: 0, values: [1, 2, 3])
+        await arr.remove(at: 1)
+
+        let result = await arr.toArrayAsync()
+        XCTAssertEqual(result, [1, 3])
+    }
+
+    func test_asyncRemoveRange() async {
+        let doc = YDocument()
+        let arr: YArray<Int> = doc.getOrCreateArray(named: "test")
+
+        await arr.insertArray(at: 0, values: [1, 2, 3, 4, 5])
+        await arr.removeRange(start: 1, length: 3)
+
+        let result = await arr.toArrayAsync()
+        XCTAssertEqual(result, [1, 5])
+    }
+
+    func test_asyncLength() async {
+        let doc = YDocument()
+        let arr: YArray<Int> = doc.getOrCreateArray(named: "test")
+
+        await arr.insertArray(at: 0, values: [1, 2, 3, 4, 5])
+
+        let length = await arr.lengthAsync()
+        XCTAssertEqual(length, 5)
+    }
+
+    func test_asyncGet() async {
+        let doc = YDocument()
+        let arr: YArray<String> = doc.getOrCreateArray(named: "test")
+
+        await arr.insertArray(at: 0, values: ["a", "b", "c"])
+
+        let value = await arr.get(index: 1)
+        XCTAssertEqual(value, "b")
+
+        let outOfBounds = await arr.get(index: 10)
+        XCTAssertNil(outOfBounds)
+    }
+
+    func test_asyncObserveStream_exists() async {
+        let doc = YDocument()
+        let arr: YArray<Int> = doc.getOrCreateArray(named: "test")
+
+        // Test that observeAsync returns an AsyncStream
+        let stream = arr.observeAsync()
+
+        // Create a task that will consume from the stream
+        let task = Task {
+            for await _ in stream {
+                break
+            }
+        }
+
+        // Cancel immediately - we just want to verify the API exists and is usable
+        task.cancel()
+    }
+
+    func test_asyncToArray() async {
+        let doc = YDocument()
+        let arr: YArray<TestType> = doc.getOrCreateArray(named: "test")
+
+        let aidar = TestType(name: "Aidar", age: 24)
+        let joe = TestType(name: "Joe", age: 55)
+
+        await arr.append(aidar)
+        await arr.append(joe)
+
+        let result = await arr.toArrayAsync()
+        XCTAssertEqual(result, [aidar, joe])
+    }
 }

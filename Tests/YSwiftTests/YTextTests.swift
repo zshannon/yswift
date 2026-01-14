@@ -289,4 +289,116 @@ class YTextTests: XCTestCase {
         object = NSObject()
         XCTAssertNil(weakObject)
     }
+
+    // MARK: - Async API Tests
+
+    func test_asyncAppend() async {
+        let doc = YDocument()
+        let text = doc.getOrCreateText(named: "test")
+
+        await text.append("hello")
+        await text.append(", world!")
+
+        let result = await text.getStringAsync()
+        XCTAssertEqual(result, "hello, world!")
+    }
+
+    func test_asyncInsert() async {
+        let doc = YDocument()
+        let text = doc.getOrCreateText(named: "test")
+
+        await text.append("world!")
+        await text.insert("hello, ", at: 0)
+
+        let result = await text.getStringAsync()
+        XCTAssertEqual(result, "hello, world!")
+    }
+
+    func test_asyncRemoveRange() async {
+        let doc = YDocument()
+        let text = doc.getOrCreateText(named: "test")
+
+        await text.append("hello, world!")
+        await text.removeRange(start: 5, length: 7)
+
+        let result = await text.getStringAsync()
+        XCTAssertEqual(result, "hello!")
+    }
+
+    func test_asyncLength() async {
+        let doc = YDocument()
+        let text = doc.getOrCreateText(named: "test")
+
+        await text.append("hello")
+        let length = await text.lengthAsync()
+        XCTAssertEqual(length, 5)
+    }
+
+    func test_asyncObserveStream_exists() async {
+        let doc = YDocument()
+        let text = doc.getOrCreateText(named: "test")
+
+        // Test that observeAsync returns an AsyncStream
+        let stream = text.observeAsync()
+
+        // Create a task that will consume from the stream
+        let task = Task {
+            for await _ in stream {
+                break
+            }
+        }
+
+        // Cancel immediately - we just want to verify the API exists and is usable
+        task.cancel()
+    }
+
+    func test_asyncFormat() async {
+        let doc = YDocument()
+        let text = doc.getOrCreateText(named: "test")
+
+        await text.append("bold text")
+        await text.format(at: 0, length: 4, attributes: ["weight": "bold"])
+
+        let diff = await text.diffAsync()
+        XCTAssertFalse(diff.isEmpty)
+    }
+
+    func test_asyncInsertWithAttributes() async {
+        let doc = YDocument()
+        let text = doc.getOrCreateText(named: "test")
+
+        await text.insertWithAttributes("styled", attributes: ["color": "red"], at: 0)
+
+        let result = await text.getStringAsync()
+        XCTAssertEqual(result, "styled")
+    }
+
+    func test_asyncDiff() async {
+        let doc = YDocument()
+        let text = doc.getOrCreateText(named: "test")
+
+        await text.append("hello world")
+
+        let diff = await text.diffAsync()
+        XCTAssertEqual(diff.count, 1)
+        if case .text(let value, _) = diff[0] {
+            // The diff value is the raw text, not JSON
+            XCTAssertTrue(value.contains("hello world"))
+        } else {
+            XCTFail("Expected text diff")
+        }
+    }
+
+    func test_asyncMultipleOperations() async {
+        let doc = YDocument()
+        let text = doc.getOrCreateText(named: "test")
+
+        // Test multiple sequential async operations
+        await text.append("hello")
+        await text.insert(" world", at: 5)
+        await text.removeRange(start: 0, length: 6)
+
+        let result = await text.getStringAsync()
+        XCTAssertEqual(result, "world")
+    }
 }

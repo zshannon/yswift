@@ -1,13 +1,21 @@
 import Combine
 import Foundation
+import Queue
 import Yniffi
 
 /// YDocument holds YSwift shared data types and coordinates collaboration and changes.
 public final class YDocument {
     let document: YrsDoc
-    /// Multiple `YDocument` instances are supported. Because `label` is required only for debugging purposes.
-    /// It is not used for unique differentiation between queues. So we safely get unique queue for each `YDocument` instance.
-    private let transactionQueue = DispatchQueue(label: "YSwift.YDocument", qos: .userInitiated)
+
+    // MARK: - Serialization Queues
+    // Two parallel worlds: sync (deprecated) and async (preferred)
+    // Don't mix - pick one paradigm and stick with it
+
+    /// GCD queue for deprecated sync APIs. Will be removed in future version.
+    private let syncQueue = DispatchQueue(label: "YSwift.YDocument.sync", qos: .userInitiated)
+
+    /// AsyncQueue for Swift 6 concurrency-native APIs (preferred).
+    private let asyncQueue = AsyncQueue()
 
     /// Create a new YSwift Document.
     public init() {
@@ -113,11 +121,43 @@ public final class YDocument {
         .eraseToAnyPublisher()
     }
 
-    // MARK: - Subdocument Queries
+    // MARK: - Subdocument Queries (Async)
+
+    /// Returns the GUIDs of all subdocuments in this document asynchronously.
+    /// - Returns: An array of subdocument GUIDs.
+    public func subdocGuidsAsync() async -> [String] {
+        await transact { $0.subdocGuids() }
+    }
+
+    /// Returns all subdocuments in this document asynchronously.
+    /// - Returns: An array of subdocuments.
+    public func subdocsAsync() async -> [YDocument] {
+        await transact { txn in
+            txn.subdocs().map { YDocument(wrapping: $0) }
+        }
+    }
+
+    // MARK: - Subdocument Queries (With Explicit Transaction)
+
+    /// Returns the GUIDs of all subdocuments using an existing transaction.
+    /// - Parameter transaction: The transaction to use.
+    /// - Returns: An array of subdocument GUIDs.
+    public func subdocGuids(transaction: YrsTransaction) -> [String] {
+        transaction.subdocGuids()
+    }
+
+    /// Returns all subdocuments using an existing transaction.
+    /// - Parameter transaction: The transaction to use.
+    /// - Returns: An array of subdocuments.
+    public func subdocs(transaction: YrsTransaction) -> [YDocument] {
+        transaction.subdocs().map { YDocument(wrapping: $0) }
+    }
+
+    // MARK: - Subdocument Queries (Deprecated Sync)
 
     /// Returns the GUIDs of all subdocuments in this document.
-    /// - Parameter transaction: An optional transaction to use. If not provided, a new one is created.
-    /// - Returns: An array of subdocument GUIDs.
+    /// - Warning: Deprecated. Use async `subdocGuidsAsync()` or pass an explicit transaction.
+    @available(*, deprecated, message: "Use async subdocGuidsAsync() instead")
     public func subdocGuids(transaction: YrsTransaction? = nil) -> [String] {
         if let transaction = transaction {
             return transaction.subdocGuids()
@@ -127,8 +167,8 @@ public final class YDocument {
     }
 
     /// Returns all subdocuments in this document.
-    /// - Parameter transaction: An optional transaction to use. If not provided, a new one is created.
-    /// - Returns: An array of subdocuments.
+    /// - Warning: Deprecated. Use async `subdocsAsync()` or pass an explicit transaction.
+    @available(*, deprecated, message: "Use async subdocsAsync() instead")
     public func subdocs(transaction: YrsTransaction? = nil) -> [YDocument] {
         if let transaction = transaction {
             return transaction.subdocs().map { YDocument(wrapping: $0) }
@@ -151,47 +191,64 @@ public final class YDocument {
         try! document.encodeDiffV1(tx: txn, stateVector: state)
     }
 
-    // MARK: - Transaction methods
+    // MARK: - Async Transaction Methods (Preferred)
 
-    /// Creates a synchronous transaction and provides that transaction to a trailing closure, within which you make changes to shared data types.
-    /// - Parameter changes: The closure in which you make changes to the document.
+    /// Creates an asynchronous transaction using Swift concurrency.
+    ///
+    /// This is the preferred way to interact with the document. Uses AsyncQueue
+    /// for proper Swift 6 concurrency integration.
+    ///
+    /// - Parameters:
+    ///   - origin: Optional origin identifier for this transaction.
+    ///   - changes: The closure in which you make changes to the document.
     /// - Returns: The value that you return from the closure.
-    public func transactSync<T>(origin: Origin? = nil, _ changes: @escaping (YrsTransaction) -> T) -> T {
-        // Avoiding deadlocks & thread explosion. We do not allow re-entrancy in Transaction methods.
-        // It is a programmer's error to invoke synchronous transact from within transaction.
-        // Better approach would be to leverage something like `DispatchSpecificKey` in Watchdog style implementation
-        // Reference: https://github.com/groue/GRDB.swift/blob/master/GRDB/Core/SchedulingWatchdog.swift
-        dispatchPrecondition(condition: .notOnQueue(transactionQueue))
-        return transactionQueue.sync {
+    public func transact<T: Sendable>(origin: Origin? = nil, _ changes: @escaping @Sendable (YrsTransaction) -> T) async -> T {
+        await asyncQueue.addOperation { [self] in
             let transaction = document.transact(origin: origin?.origin)
-            defer {
-                transaction.free()
-            }
+            defer { transaction.free() }
+            return changes(transaction)
+        }.value
+    }
+
+    /// Creates an asynchronous throwing transaction using Swift concurrency.
+    public func transact<T: Sendable>(origin: Origin? = nil, _ changes: @escaping @Sendable (YrsTransaction) throws -> T) async throws -> T {
+        try await asyncQueue.addOperation { [self] in
+            let transaction = document.transact(origin: origin?.origin)
+            defer { transaction.free() }
+            return try changes(transaction)
+        }.value
+    }
+
+    // MARK: - Sync Transaction Methods (Deprecated)
+
+    /// Creates a synchronous transaction and provides that transaction to a trailing closure.
+    ///
+    /// - Warning: Deprecated. Use async `transact()` instead. Mixing sync and async
+    ///   transaction methods on the same document will cause race conditions.
+    ///
+    /// - Parameters:
+    ///   - origin: Optional origin identifier for this transaction.
+    ///   - changes: The closure in which you make changes to the document.
+    /// - Returns: The value that you return from the closure.
+    @available(*, deprecated, message: "Use async transact() instead. Mixing sync/async causes races.")
+    public func transactSync<T>(origin: Origin? = nil, _ changes: @escaping (YrsTransaction) -> T) -> T {
+        dispatchPrecondition(condition: .notOnQueue(syncQueue))
+        return syncQueue.sync {
+            let transaction = document.transact(origin: origin?.origin)
+            defer { transaction.free() }
             return changes(transaction)
         }
     }
 
-    /// Creates an asynchronous transaction and provides that transaction to a trailing closure, within which you make changes to shared data types.
-    /// - Parameter changes: The closure in which you make changes to the document.
-    /// - Returns: The value that you return from the closure.
-    public func transact<T>(origin: Origin? = nil, _ changes: @escaping (YrsTransaction) -> T) async -> T {
-        await withCheckedContinuation { continuation in
-            transactAsync(origin, changes) { result in
-                continuation.resume(returning: result)
-            }
-        }
-    }
-
-    /// Creates an asynchronous transaction and provides that transaction to a trailing closure, within which you make changes to shared data types.
-    /// - Parameter changes: The closure in which you make changes to the document.
-    /// - Parameter completion: A completion handler that is called with the value returned from the closure in which you made changes.
+    /// Creates an asynchronous transaction with completion handler.
+    ///
+    /// - Warning: Deprecated. Use async `transact()` instead.
+    @available(*, deprecated, message: "Use async transact() instead")
     public func transactAsync<T>(_ origin: Origin? = nil, _ changes: @escaping (YrsTransaction) -> T, completion: @escaping (T) -> Void) {
-        transactionQueue.async { [weak self] in
+        syncQueue.async { [weak self] in
             guard let self = self else { return }
             let transaction = self.document.transact(origin: origin?.origin)
-            defer {
-                transaction.free()
-            }
+            defer { transaction.free() }
             let result = changes(transaction)
             completion(result)
         }
@@ -228,9 +285,9 @@ public final class YDocument {
         return YUndoManager(manager: document.undoManager(trackedRefs: mapped))
     }
 
-    // MARK: - JSON Path Queries
+    // MARK: - JSON Path Queries (Async)
 
-    /// Queries the document using JSON path syntax.
+    /// Queries the document using JSON path syntax asynchronously.
     ///
     /// JSON path allows you to query nested document structures. Examples:
     /// - `$.users` - Get the "users" root-level collection
@@ -240,9 +297,30 @@ public final class YDocument {
     ///
     /// - Parameters:
     ///   - path: A JSON path expression (e.g., "$.users[*].name")
-    ///   - transaction: An optional transaction to use. If not provided, a new one is created.
     /// - Returns: An array of JSON-encoded strings representing matching values.
     /// - Throws: `YrsJsonPathError` if the path expression is invalid.
+    public func queryAsync(_ path: String) async throws -> [String] {
+        try await transact { txn in
+            try txn.jsonPath(path: path)
+        }
+    }
+
+    /// Queries the document using JSON path syntax with an existing transaction.
+    ///
+    /// - Parameters:
+    ///   - path: A JSON path expression (e.g., "$.users[*].name")
+    ///   - transaction: The transaction to use.
+    /// - Returns: An array of JSON-encoded strings representing matching values.
+    /// - Throws: `YrsJsonPathError` if the path expression is invalid.
+    public func query(_ path: String, transaction: YrsTransaction) throws -> [String] {
+        try transaction.jsonPath(path: path)
+    }
+
+    // MARK: - JSON Path Queries (Deprecated Sync)
+
+    /// Queries the document using JSON path syntax.
+    /// - Warning: Deprecated. Use async `queryAsync(_:)` or pass an explicit transaction.
+    @available(*, deprecated, message: "Use async queryAsync(_:) instead")
     public func query(_ path: String, transaction: YrsTransaction? = nil) throws -> [String] {
         if let transaction = transaction {
             return try transaction.jsonPath(path: path)

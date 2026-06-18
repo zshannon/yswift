@@ -202,7 +202,17 @@ public final class YDocument {
     ///   - origin: Optional origin identifier for this transaction.
     ///   - changes: The closure in which you make changes to the document.
     /// - Returns: The value that you return from the closure.
+    #if compiler(>=6.2)
+    public nonisolated(nonsending) func transact<T: Sendable>(origin: Origin? = nil, _ changes: @escaping @Sendable (YrsTransaction) -> T) async -> T {
+        await transactImpl(origin: origin, changes)
+    }
+    #else
     public func transact<T: Sendable>(origin: Origin? = nil, _ changes: @escaping @Sendable (YrsTransaction) -> T) async -> T {
+        await transactImpl(origin: origin, changes)
+    }
+    #endif
+
+    private func transactImpl<T: Sendable>(origin: Origin? = nil, _ changes: @escaping @Sendable (YrsTransaction) -> T) async -> T {
         await asyncQueue.addOperation { [self] in
             let transaction = document.transact(origin: origin?.origin)
             defer { transaction.free() }
@@ -211,7 +221,17 @@ public final class YDocument {
     }
 
     /// Creates an asynchronous throwing transaction using Swift concurrency.
+    #if compiler(>=6.2)
+    public nonisolated(nonsending) func transact<T: Sendable>(origin: Origin? = nil, _ changes: @escaping @Sendable (YrsTransaction) throws -> T) async throws -> T {
+        try await transactImpl(origin: origin, changes)
+    }
+    #else
     public func transact<T: Sendable>(origin: Origin? = nil, _ changes: @escaping @Sendable (YrsTransaction) throws -> T) async throws -> T {
+        try await transactImpl(origin: origin, changes)
+    }
+    #endif
+
+    private func transactImpl<T: Sendable>(origin: Origin? = nil, _ changes: @escaping @Sendable (YrsTransaction) throws -> T) async throws -> T {
         try await asyncQueue.addOperation { [self] in
             let transaction = document.transact(origin: origin?.origin)
             defer { transaction.free() }

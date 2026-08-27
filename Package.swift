@@ -59,7 +59,7 @@ let package = Package(
     name: "YSwift",
     platforms: [.iOS(.v13), .macOS(.v10_15)],
     products: [
-        .library(name: "YSwift", targets: ["YSwift"]),
+        .library(name: "YSwift", type: .dynamic, targets: ["YSwift"]),
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-docc-plugin", from: "1.1.0"),

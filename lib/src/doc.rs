@@ -110,7 +110,7 @@ impl YrsDoc {
 
     /// Returns the client ID for this document.
     pub(crate) fn client_id(&self) -> u64 {
-        self.doc().as_ref().client_id()
+        self.doc().as_ref().client_id().get()
     }
 
     /// Destroys this subdocument within the parent transaction.
@@ -139,7 +139,7 @@ impl YrsDoc {
         let mut opts = Options::default();
         opts.auto_load = options.auto_load;
         if let Some(client_id) = options.client_id {
-            opts.client_id = client_id;
+            opts.client_id = yrs::ClientID::new(client_id);
         }
         if let Some(guid) = options.guid {
             opts.guid = Arc::from(guid.as_str());

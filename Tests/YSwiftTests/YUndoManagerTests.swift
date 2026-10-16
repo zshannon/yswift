@@ -1,5 +1,5 @@
-import Combine
-import XCTest
+import Foundation
+import Testing
 @testable import YSwift
 
 class TestMetadata {
@@ -30,24 +30,19 @@ func exchangeUpdates(_ document1: YDocument, _ document2: YDocument) {
     }
 }
 
-class YUndoManagerTests: XCTestCase {
+@Suite
+final class YUndoManagerTests {
     var document: YDocument!
     var text: YText!
     var manager: YUndoManager<TestMetadata>!
-    
-    override func setUp() {
+
+    init() {
         document = YDocument()
         text = document.getOrCreateText(named: "test")
         manager = document.undoManager(trackedRefs: [text])
     }
-    
-    override func tearDown() {
-        document = nil
-        text = nil
-        manager = nil
-    }
-    
-    
+
+    @Test
     func test_undoTextBasic() throws {
         text.insert("1221", at: 0)
         manager.wrap()
@@ -55,82 +50,89 @@ class YUndoManagerTests: XCTestCase {
         manager.wrap()
         text.insert("3", at: 3)
         manager.wrap()
-        
-        XCTAssertEqual(text.getString(), "123321")
-        
-        XCTAssert (try manager.undo())
-        XCTAssertEqual(text.getString(), "12321")
-        
-        XCTAssert (try manager.undo())
-        XCTAssertEqual(text.getString(), "1221")
-        
+
+        #expect((text.getString()) == ("123321"))
+
+        #expect(try manager.undo())
+        #expect((text.getString()) == ("12321"))
+
+        #expect(try manager.undo())
+        #expect((text.getString()) == ("1221"))
+
         text.insert("3", at: 2)
-        XCTAssertEqual(text.getString(), "12321")
+        #expect((text.getString()) == ("12321"))
     }
-    
-    func test_undoEvents() throws {
-        var received = TestMetadata("")
-        
-        let on_added = manager.observeAdded({ (e, metadata) -> TestMetadata? in
-            let m = metadata ?? TestMetadata("")
-            return TestMetadata(m.value + "A")
-        })
-        
-        let on_popped = manager.observePopped({ (e, metadata) -> TestMetadata? in
-            received = metadata!
-            return metadata
-        })
-        
-        text.insert("abc", at: 0)
-        
-        XCTAssert (try manager.undo())
-        XCTAssertEqual(received.value, "A")
-        
-        XCTAssert (try manager.redo())
-        XCTAssertEqual(received.value, "A")
-        
-        on_added.cancel()
-        on_popped.cancel()
+
+    @Test
+    func test_undoEvents() async throws {
+        let exercise: (Confirmation) throws -> sending Void = { [self] eventReceived in
+            var received = TestMetadata("")
+
+            try manager.observeAdded(key: "added", { (e, metadata) -> TestMetadata? in
+                    eventReceived()
+                let m = metadata ?? TestMetadata("")
+                return TestMetadata(m.value + "A")
+            })
+
+            try manager.observePopped(key: "popped", { (e, metadata) -> TestMetadata? in
+                    eventReceived()
+                received = metadata!
+                return metadata
+            })
+
+            text.insert("abc", at: 0)
+
+            #expect(try manager.undo())
+            #expect((received.value) == ("A"))
+
+            #expect(try manager.redo())
+            #expect((received.value) == ("A"))
+
+            try manager.unobserveAdded(key: "added")
+            try manager.unobservePopped(key: "popped")
+        }
+        try await confirmation("Receives each change", expectedCount: 5, exercise)
     }
-    
+
+    @Test
     func test_undoDifferentOrigins() throws {
         let localOrigin = Origin("local")
-        
+
         let remoteDocument = YDocument()
         let remoteText = remoteDocument.getOrCreateText(named: "test")
         manager.addOrigin(localOrigin) // only track transaction from local origin
-        
+
         // create some changes locally
         document.transactSync(origin: localOrigin) { txn in
             self.text.insert("hello", at: 0, in: txn)
         }
         self.manager.wrap() // add changes on a stack: they will be undone as one
-        
+
         exchangeUpdates(document, remoteDocument)
-        
+
         // concurrent change on the remote replica
         document.transactSync(origin: localOrigin) { txn in
             self.text.insert(" world", at: 5, in: txn)
         }
         self.manager.wrap() // add next batch of changes on a stack
         remoteText.insert("<break>", at: 1)
-        
-        XCTAssertEqual(text.getString(), "hello world")
-        
+
+        #expect((text.getString()) == ("hello world"))
+
         exchangeUpdates(document, remoteDocument)
-        
-        XCTAssertEqual(text.getString(), "h<break>ello world")
-        XCTAssertEqual(remoteText.getString(), "h<break>ello world")
-        
-        XCTAssertTrue (try manager.undo())
-        
+
+        #expect((text.getString()) == ("h<break>ello world"))
+        #expect((remoteText.getString()) == ("h<break>ello world"))
+
+        #expect(try manager.undo())
+
         // only changes marked locally have been reversed
-        XCTAssertEqual(text.getString(), "h<break>ello")
-        
-        XCTAssertTrue (try manager.undo())
-        XCTAssertEqual(text.getString(), "<break>")
-        
-        XCTAssertFalse(try manager.undo()) // remote changes are not reverted
-        XCTAssertEqual(text.getString(), "<break>")
+        #expect((text.getString()) == ("h<break>ello"))
+
+        #expect(try manager.undo())
+        #expect((text.getString()) == ("<break>"))
+
+        #expect(!(try manager.undo())) // remote changes are not reverted
+        #expect((text.getString()) == ("<break>"))
     }
 }

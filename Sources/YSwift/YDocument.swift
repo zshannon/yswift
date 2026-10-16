@@ -1,10 +1,12 @@
-import Combine
 import Foundation
 import Queue
-import Yniffi
+@preconcurrency import Yniffi
 
 /// YDocument holds YSwift shared data types and coordinates collaboration and changes.
-public final class YDocument {
+// The native document uses Rust synchronization; Swift transaction work is serialized
+// by AsyncQueue. As with the collection wrappers, callers must not mix the deprecated
+// sync transaction API with async transactions on the same document.
+public final class YDocument: @unchecked Sendable {
     let document: YrsDoc
 
     // MARK: - Serialization Queues
@@ -25,6 +27,7 @@ public final class YDocument {
     /// Create a new YSwift Document with custom options.
     /// - Parameter options: Configuration options for the document.
     public init(options: YDocumentOptions) {
+        precondition(options.clientId.map { $0 < (1 << 53) } ?? true, "Yrs client IDs must fit in 53 bits")
         document = YrsDoc.newWithOptions(options: options.yrsOptions)
     }
 
@@ -85,40 +88,64 @@ public final class YDocument {
 
     // MARK: - Subdocument Observation
 
-    /// Registers a closure that is called when subdocuments are added, loaded, or removed.
-    /// - Parameter body: A closure that receives the subdocs event.
-    /// - Returns: A subscription that can be used to cancel the observation.
-    public func observeSubdocs(_ body: @escaping (YSubdocsEvent) -> Void) -> YSubscription {
-        let delegate = YSubdocsObservationDelegateWrapper(callback: body)
-        return YSubscription(subscription: document.observeSubdocs(delegate: delegate))
+    /// Observes lifecycle events under a key in this document's transaction.
+    /// Registering the same key replaces its previous callback.
+    public func observeSubdocs(key: String, transaction: YrsTransaction, _ body: @escaping (YSubdocsEvent) -> Void) {
+        document.observeSubdocs(tx: transaction, key: key, delegate: YSubdocsObservationDelegateWrapper(callback: body))
     }
 
-    /// Returns a publisher that emits subdocument lifecycle events.
-    public func observeSubdocs() -> AnyPublisher<YSubdocsEvent, Never> {
-        let subject = PassthroughSubject<YSubdocsEvent, Never>()
-        let subscription = observeSubdocs { subject.send($0) }
-        return subject.handleEvents(receiveCancel: {
-            subscription.cancel()
-        })
-        .eraseToAnyPublisher()
+    /// Removes a lifecycle observer in a transaction after event delivery has finished.
+    @discardableResult
+    public func unobserveSubdocs(key: String, transaction: YrsTransaction) -> Bool {
+        document.unobserveSubdocs(tx: transaction, key: key)
     }
 
-    /// Registers a closure that is called when this document is destroyed.
-    /// - Parameter body: A closure that is called when the document is destroyed.
-    /// - Returns: A subscription that can be used to cancel the observation.
-    public func observeDestroy(_ body: @escaping () -> Void) -> YSubscription {
-        let delegate = YDestroyObservationDelegateWrapper(callback: body)
-        return YSubscription(subscription: document.observeDestroy(delegate: delegate))
+    /// Returns a standard async stream of subdocument lifecycle events.
+    public func observeSubdocsAsync() async -> AsyncStream<YSubdocsEvent> {
+        let key = UUID().uuidString
+        let (stream, continuation) = AsyncStream<YSubdocsEvent>.makeStream(bufferingPolicy: .unbounded)
+        await transact { transaction in
+            self.observeSubdocs(key: key, transaction: transaction) { continuation.yield($0) }
+        }
+        continuation.onTermination = { _ in
+            Task {
+                await self.transact { transaction in
+                    self.unobserveSubdocs(key: key, transaction: transaction)
+                }
+            }
+        }
+        return stream
     }
 
-    /// Returns a publisher that emits when this document is destroyed.
-    public func observeDestroy() -> AnyPublisher<Void, Never> {
-        let subject = PassthroughSubject<Void, Never>()
-        let subscription = observeDestroy { subject.send(()) }
-        return subject.handleEvents(receiveCancel: {
-            subscription.cancel()
-        })
-        .eraseToAnyPublisher()
+    /// Observes destruction under a key in this document's transaction.
+    public func observeDestroy(key: String, transaction: YrsTransaction, _ body: @escaping () -> Void) {
+        document.observeDestroy(tx: transaction, key: key, delegate: YDestroyObservationDelegateWrapper(callback: body))
+    }
+
+    /// Removes a destroy observer in a transaction after event delivery has finished.
+    @discardableResult
+    public func unobserveDestroy(key: String, transaction: YrsTransaction) -> Bool {
+        document.unobserveDestroy(tx: transaction, key: key)
+    }
+
+    /// Returns a standard async stream that emits once when this document is destroyed.
+    public func observeDestroyAsync() async -> AsyncStream<Void> {
+        let key = UUID().uuidString
+        let (stream, continuation) = AsyncStream<Void>.makeStream(bufferingPolicy: .unbounded)
+        await transact { transaction in
+            self.observeDestroy(key: key, transaction: transaction) {
+                continuation.yield(())
+                continuation.finish()
+            }
+        }
+        continuation.onTermination = { _ in
+            Task {
+                await self.transact { transaction in
+                    self.unobserveDestroy(key: key, transaction: transaction)
+                }
+            }
+        }
+        return stream
     }
 
     // MARK: - Subdocument Queries (Async)
@@ -257,20 +284,6 @@ public final class YDocument {
             let transaction = document.transact(origin: origin?.origin)
             defer { transaction.free() }
             return changes(transaction)
-        }
-    }
-
-    /// Creates an asynchronous transaction with completion handler.
-    ///
-    /// - Warning: Deprecated. Use async `transact()` instead.
-    @available(*, deprecated, message: "Use async transact() instead")
-    public func transactAsync<T>(_ origin: Origin? = nil, _ changes: @escaping (YrsTransaction) -> T, completion: @escaping (T) -> Void) {
-        syncQueue.async { [weak self] in
-            guard let self = self else { return }
-            let transaction = self.document.transact(origin: origin?.origin)
-            defer { transaction.free() }
-            let result = changes(transaction)
-            completion(result)
         }
     }
 

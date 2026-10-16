@@ -1,17 +1,16 @@
 use crate::attrs::YrsAttrs;
 use crate::delta::YrsDelta;
-use crate::subscription::YSubscription;
 use crate::transaction::YrsTransaction;
 use yrs::Any;
 use parking_lot::ReentrantMutex;
 use std::cell::UnsafeCell;
 use std::fmt::Debug;
-use std::sync::Arc;
 use yrs::{GetString, Observable, Text, TextRef};
 use yrs::branch::Branch;
+use yrs::{Hook, SharedRef};
 use crate::doc::YrsCollectionPtr;
 
-pub(crate) struct YrsText(ReentrantMutex<UnsafeCell<TextRef>>);
+pub(crate) struct YrsText(ReentrantMutex<UnsafeCell<TextRef>>, Hook<TextRef>);
 
 // Safe because ReentrantMutex provides proper thread synchronization.
 unsafe impl Send for YrsText {}
@@ -52,7 +51,8 @@ impl AsRef<Branch> for YrsText {
 
 impl From<TextRef> for YrsText {
     fn from(value: TextRef) -> Self {
-        YrsText(ReentrantMutex::new(UnsafeCell::new(value)))
+        let hook = value.hook();
+        YrsText(ReentrantMutex::new(UnsafeCell::new(value)), hook)
     }
 }
 
@@ -161,18 +161,22 @@ impl YrsText {
         self.inner().as_ref().len(tx)
     }
 
-    pub(crate) fn observe(&self, delegate: Box<dyn YrsTextObservationDelegate>) -> Arc<YSubscription> {
-        let mut text = self.inner();
-        let subscription = text
-            .as_mut()
-            .observe(move |transaction, text_event| {
-                let delta = text_event.delta(transaction);
-                let result: Vec<YrsDelta> =
-                    delta.iter().map(|change| YrsDelta::from(change)).collect();
-                delegate.call(result)
-            });
+    pub(crate) fn observe(&self, transaction: &YrsTransaction, key: String, delegate: Box<dyn YrsTextObservationDelegate>) -> bool {
+        let tx = transaction.transaction();
+        let tx = tx.as_ref().unwrap();
+        let Some(source) = self.1.get(tx) else { return false; };
+        source.observe(key.as_str(), move |transaction, event| {
+            let delta = event.delta(transaction);
+            let result = delta.iter().map(YrsDelta::from).collect();
+            delegate.call(result);
+        });
+        true
+    }
 
-            Arc::new(YSubscription::new(subscription))
+    pub(crate) fn unobserve(&self, transaction: &YrsTransaction, key: String) -> bool {
+        let tx = transaction.transaction();
+        let tx = tx.as_ref().unwrap();
+        self.1.get(tx).is_some_and(|source| source.unobserve(key.as_str()))
     }
 
     /// Applies a delta to the text. Delta is a JSON array of operations.

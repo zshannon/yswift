@@ -1,4 +1,3 @@
-import Combine
 import SwiftUI
 import YSwift
 
@@ -12,7 +11,7 @@ struct TodoItem: Codable, Hashable, Identifiable {
 }
 
 struct TodolistView: View {
-    @ObservedObject var viewModel: TodolistViewModel
+    let viewModel: TodolistViewModel
     @State private var text = ""
 
     var body: some View {

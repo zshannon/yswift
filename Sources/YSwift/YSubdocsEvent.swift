@@ -1,8 +1,7 @@
-import Combine
-import Yniffi
+@preconcurrency import Yniffi
 
 /// An event emitted when subdocuments are added, loaded, or removed from a parent document.
-public struct YSubdocsEvent {
+public struct YSubdocsEvent: Sendable {
     /// Subdocuments that were added to the parent document.
     public let added: [YDocument]
 

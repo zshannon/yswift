@@ -31,7 +31,8 @@ await array.remove(at: 0)
 await array.removeRange(start: 1, length: 2)
 
 // Observe changes
-for await changes in array.observeAsync() {
+let events = await array.observeAsync()
+for await changes in events {
     for change in changes {
         switch change {
         case .added(let elements):
@@ -71,8 +72,8 @@ for await changes in array.observeAsync() {
 - ``YSwift/YArray/removeRange(start:length:transaction:)``
 - ``YSwift/YArray/length(transaction:)``
 - ``YSwift/YArray/toArray(transaction:)``
-- ``YSwift/YArray/observe()``
-- ``YSwift/YArray/observe(_:)``
+- ``YSwift/YArray/observeAsync()``
+- ``YSwift/YArray/observe(key:transaction:_:)``
 
 ### Iterating over an Array
 
@@ -95,5 +96,3 @@ for await changes in array.observeAsync() {
 - ``YSwift/YArray/pushMap(transaction:)``
 - ``YSwift/YArray/pushArray(transaction:)``
 - ``YSwift/YArray/pushText(transaction:)``
-- ``YSwift/YArray/move(from:to:transaction:)``
-- ``YSwift/YArray/moveRange(from:to:target:transaction:)``

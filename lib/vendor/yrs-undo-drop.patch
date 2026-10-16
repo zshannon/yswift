@@ -1,0 +1,246 @@
+--- a/src/observer.rs
++++ b/src/observer.rs
+@@ -5,7 +5,7 @@
+ 
+ /// Data structure used to handle publish/subscribe callbacks of a specific type.
+ pub struct Observer<F> {
+-    callbacks: HashMap<Origin, ArcSwapOption<F>>,
++    callbacks: HashMap<Origin, Arc<ArcSwapOption<F>>>,
+ }
+ 
+ impl<F> Observer<F> {
+@@ -24,9 +24,19 @@
+     /// Subscribes a callback under a given key. If a callback with the same key already
+     /// exists, it will be replaced. The callback can be removed via [Observer::unsubscribe].
+     pub fn subscribe(&mut self, id: impl Into<Origin>, callback: F) {
++        self.subscribe_with_handle(id, callback);
++    }
++
++    // Internal cancellation cell, usable without acquiring a document transaction.
++    pub(crate) fn subscribe_with_handle(
++        &mut self,
++        id: impl Into<Origin>,
++        callback: F,
++    ) -> Arc<ArcSwapOption<F>> {
+         self.drain_pending();
+-        self.callbacks
+-            .insert(id.into(), ArcSwapOption::new(Some(Arc::new(callback))));
++        let cell = Arc::new(ArcSwapOption::new(Some(Arc::new(callback))));
++        self.callbacks.insert(id.into(), cell.clone());
++        cell
+     }
+ 
+     /// Removes a callback by its key. Returns `true` if the callback was found and removed.
+--- a/src/undo.rs
++++ b/src/undo.rs
+@@ -12,7 +12,9 @@
+ use std::fmt::Formatter;
+ use std::ops::{Deref, DerefMut};
+ use std::sync::atomic::{AtomicPtr, Ordering};
+-use std::sync::Arc;
++use std::sync::{Arc, OnceLock, Weak};
++use arc_swap::ArcSwapOption;
++use crate::store::{AfterTransactionFn, DestroyFn};
+ 
+ macro_rules! define_undo_observer {
+     (
+@@ -71,7 +73,14 @@
+ /// - [UndoManager::observe_item_popped], which is fired whenever [StackItem] is being from undo
+ ///    manager as a result of calling either [UndoManager::undo] or [UndoManager::redo] method.
+ pub struct UndoManager<M> {
+-    state: Arc<Inner<M>>,
++    state: Option<Arc<Inner<M>>>,
++    // Empty while the manager is alive, preserving Arc::get_mut's uniqueness.
++    // During Drop this owns the state until every in-flight callback has returned.
++    dropped_state: Arc<OnceLock<Arc<Inner<M>>>>,
++    observers: Vec<(
++        Weak<ArcSwapOption<DestroyFn>>,
++        Weak<ArcSwapOption<AfterTransactionFn>>,
++    )>,
+ }
+ 
+ #[cfg(feature = "sync")]
+@@ -145,7 +154,11 @@
+             docs: HashMap::new(),
+         });
+ 
+-        UndoManager { state }
++        UndoManager {
++            state: Some(state),
++            dropped_state: Arc::new(OnceLock::new()),
++            observers: Vec::new(),
++        }
+     }
+ 
+     /// Extends a list of shared types tracked by current undo manager by a given `scope`.
+@@ -153,41 +166,50 @@
+     where
+         T: AsRef<Branch>,
+     {
+-        let origin = Origin::from(Arc::as_ptr(&self.state) as usize);
+-        let inner_mut = Arc::get_mut(&mut self.state).unwrap();
++        let origin = Origin::from(Arc::as_ptr(self.state.as_ref().unwrap()) as usize);
++        let destroy_owner = self.dropped_state.clone();
++        let transaction_owner = self.dropped_state.clone();
++        let inner_mut = Arc::get_mut(self.state.as_mut().unwrap()).unwrap();
+         let ptr1 = AtomicPtr::new(inner_mut as *mut Inner<M>);
+         let ptr2 = AtomicPtr::new(inner_mut as *mut Inner<M>);
+ 
+         if let Entry::Vacant(e) = inner_mut.docs.entry(doc.guid()) {
+             inner_mut.options.tracked_origins.insert(origin.clone());
+ 
+-            doc.observe_destroy(origin.clone(), move |txn, _| {
++            let mut txn = doc.try_transact_mut().unwrap();
++            let events = txn.store.events.get_or_insert_with(Default::default);
++            let destroy = events.destroy_events.subscribe_with_handle(origin.clone(), Box::new(move |txn, _| {
++                if destroy_owner.get().is_some() {
++                    return;
++                }
+                 let ptr = ptr1.load(Ordering::Acquire);
+                 let inner = unsafe { ptr.as_mut().unwrap() };
+                 Self::handle_destroy(txn, inner)
+-            })
+-            .unwrap();
+-
+-            doc.observe_after_transaction(origin, move |txn| {
++            }));
++
++            let after_transaction = events.after_transaction_events.subscribe_with_handle(origin, Box::new(move |txn| {
++                if transaction_owner.get().is_some() {
++                    return;
++                }
+                 let ptr = ptr2.load(Ordering::Acquire);
+                 let inner = unsafe { ptr.as_mut().unwrap() };
+                 Self::handle_after_transaction(inner, txn);
+-            })
+-            .unwrap();
+-
++            }));
++
++            self.observers.push((Arc::downgrade(&destroy), Arc::downgrade(&after_transaction)));
+             e.insert(doc.clone());
+         }
+         let ptr = BranchPtr::from(scope.as_ref());
+-        let inner = Arc::get_mut(&mut self.state).unwrap();
++        let inner = Arc::get_mut(self.state.as_mut().unwrap()).unwrap();
+         inner.scope.insert(ptr);
+     }
+ 
+     pub fn docs(&self) -> impl Iterator<Item = &Doc> {
+-        self.state.docs.values()
++        self.state.as_ref().unwrap().docs.values()
+     }
+ 
+     fn inner_mut(&mut self) -> &mut Inner<M> {
+-        Arc::get_mut(&mut self.state).unwrap()
++        Arc::get_mut(self.state.as_mut().unwrap()).unwrap()
+     }
+ 
+     fn should_skip(inner: &Inner<M>, txn: &TransactionMut) -> bool {
+@@ -349,7 +371,7 @@
+     where
+         O: Into<Origin>,
+     {
+-        let inner = Arc::get_mut(&mut self.state).unwrap();
++        let inner = Arc::get_mut(self.state.as_mut().unwrap()).unwrap();
+         inner.options.tracked_origins.insert(origin.into());
+     }
+ 
+@@ -358,7 +380,7 @@
+     where
+         O: Into<Origin>,
+     {
+-        let inner = Arc::get_mut(&mut self.state).unwrap();
++        let inner = Arc::get_mut(self.state.as_mut().unwrap()).unwrap();
+         inner.options.tracked_origins.remove(&origin.into());
+     }
+ 
+@@ -377,7 +399,7 @@
+     }
+ 
+     fn clear_internal(&mut self, clear_undo: bool, clear_redo: bool) {
+-        let inner = Arc::get_mut(&mut self.state).unwrap();
++        let inner = Arc::get_mut(self.state.as_mut().unwrap()).unwrap();
+ 
+         let undo_cleared = Self::clear_stack(&inner.scope, &inner.docs, &mut inner.undo_stack);
+         let redo_cleared = Self::clear_stack(&inner.scope, &inner.docs, &mut inner.redo_stack);
+@@ -439,7 +461,7 @@
+     }
+ 
+     pub fn as_origin(&self) -> Origin {
+-        let mgr_ptr: *const Inner<M> = &*self.state;
++        let mgr_ptr = Arc::as_ptr(self.state.as_ref().unwrap());
+         Origin::from(mgr_ptr as usize)
+     }
+ 
+@@ -472,25 +494,25 @@
+     /// txt.get_string(&doc.transact()); // => "a" (note that only 'b' was removed)
+     /// ```
+     pub fn reset(&mut self) {
+-        let inner = Arc::get_mut(&mut self.state).unwrap();
++        let inner = Arc::get_mut(self.state.as_mut().unwrap()).unwrap();
+         inner.last_change = 0;
+     }
+ 
+     /// Are there any undo steps available?
+     pub fn can_undo(&self) -> bool {
+-        !self.state.undo_stack.is_empty()
++        !self.state.as_ref().unwrap().undo_stack.is_empty()
+     }
+ 
+     /// Returns a list of [StackItem]s stored within current undo manager responsible for performing
+     /// potential undo operations.
+     pub fn undo_stack(&self) -> &[StackItem<M>] {
+-        &self.state.undo_stack.0
++        &self.state.as_ref().unwrap().undo_stack.0
+     }
+ 
+     /// Returns a list of [StackItem]s stored within current undo manager responsible for performing
+     /// potential redo operations.
+     pub fn redo_stack(&self) -> &[StackItem<M>] {
+-        &self.state.redo_stack.0
++        &self.state.as_ref().unwrap().redo_stack.0
+     }
+ 
+     /// Undo last action tracked by current undo manager. Actions (a.k.a. [StackItem]s) are groups
+@@ -531,7 +553,7 @@
+ 
+     /// Are there any redo steps available?
+     pub fn can_redo(&self) -> bool {
+-        !self.state.redo_stack.is_empty()
++        !self.state.as_ref().unwrap().redo_stack.is_empty()
+     }
+ 
+     /// Redo'es last action previously undo'ed by current undo manager. Actions
+@@ -719,7 +741,7 @@
+ impl<M: std::fmt::Debug> std::fmt::Debug for UndoManager<M> {
+     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+         let mut s = f.debug_struct("UndoManager");
+-        let state = &self.state;
++        let state = self.state.as_ref().unwrap();
+         s.field("scope", &state.scope);
+         s.field("tracked_origins", &state.options.tracked_origins);
+         if !state.undo_stack.is_empty() {
+@@ -734,10 +756,18 @@
+ 
+ impl<M> Drop for UndoManager<M> {
+     fn drop(&mut self) {
+-        let origin = Origin::from(Arc::as_ptr(&self.state) as usize);
+-        for doc in self.state.docs.values() {
+-            doc.unobserve_destroy(origin.clone()).unwrap();
+-            doc.unobserve_after_transaction(origin.clone()).unwrap();
++        // Publish ownership before cancellation: Observer::trigger retains the callback
++        // (and therefore dropped_state) through the complete callback invocation.
++        // Taking the sole Arc does not access Inner, which a callback may be mutating.
++        let state = self.state.take().unwrap();
++        assert!(self.dropped_state.set(state).is_ok());
++        for (destroy, after_transaction) in &self.observers {
++            if let Some(cell) = destroy.upgrade() {
++                cell.store(None);
++            }
++            if let Some(cell) = after_transaction.upgrade() {
++                cell.store(None);
++            }
+         }
+     }
+ }

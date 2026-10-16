@@ -1,20 +1,32 @@
 import Foundation
-import XCTest
+import Testing
 @testable import YSwift
 
-class YDocumentTests: XCTestCase {
+@Suite
+final class YDocumentTests {
+    @Test
     func test_memoryLeaks() {
-        let document = YDocument()
-        let array: YArray<String> = document.getOrCreateArray(named: "array")
-        let map: YMap<String> = document.getOrCreateMap(named: "map")
-        let text: YText = document.getOrCreateText(named: "text")
-
-        trackForMemoryLeaks(array)
-        trackForMemoryLeaks(map)
-        trackForMemoryLeaks(text)
-        trackForMemoryLeaks(document)
+        weak var weakDocument: YDocument?
+        weak var weakArray: YArray<String>?
+        weak var weakMap: YMap<String>?
+        weak var weakText: YText?
+        do {
+            let document = YDocument()
+            let array: YArray<String> = document.getOrCreateArray(named: "array")
+            let map: YMap<String> = document.getOrCreateMap(named: "map")
+            let text = document.getOrCreateText(named: "text")
+            weakDocument = document
+            weakArray = array
+            weakMap = map
+            weakText = text
+        }
+        #expect(weakDocument == nil)
+        #expect(weakArray == nil)
+        #expect(weakMap == nil)
+        #expect(weakText == nil)
     }
 
+    @Test
     func test_localAndRemoteSyncing() {
         let localDocument = YDocument()
         let localText = localDocument.getOrCreateText(named: "example")
@@ -43,9 +55,10 @@ class YDocumentTests: XCTestCase {
             remoteText.getString(in: txn)
         }
 
-        XCTAssertEqual(localString, remoteString)
+        #expect((localString) == (remoteString))
     }
 
+    @Test
     func test_localAndRemoteEditingAndSyncing() {
         let localDocument = YDocument()
         let localText = localDocument.getOrCreateText(named: "example")
@@ -87,11 +100,12 @@ class YDocumentTests: XCTestCase {
             remoteText.getString(in: txn)
         }
 
-        XCTAssertEqual(localString, remoteString)
+        #expect((localString) == (remoteString))
     }
 
     // MARK: - Async API Tests
 
+    @Test
     func test_asyncTransact_basicUsage() async {
         let doc = YDocument()
         let text = doc.getOrCreateText(named: "test")
@@ -104,9 +118,10 @@ class YDocumentTests: XCTestCase {
             text.getString(in: txn)
         }
 
-        XCTAssertEqual(result, "hello")
+        #expect((result) == ("hello"))
     }
 
+    @Test
     func test_asyncTransact_syncing() async {
         let localDoc = YDocument()
         let localText = localDoc.getOrCreateText(named: "example")
@@ -135,9 +150,10 @@ class YDocumentTests: XCTestCase {
             remoteText.getString(in: txn)
         }
 
-        XCTAssertEqual(remoteString, "async hello!")
+        #expect((remoteString) == ("async hello!"))
     }
 
+    @Test
     func test_asyncTransact_multipleOperations() async {
         let doc = YDocument()
         let map: YMap<String> = doc.getOrCreateMap(named: "data")
@@ -154,12 +170,13 @@ class YDocumentTests: XCTestCase {
         }
 
         // All operations should have completed
-        XCTAssertEqual(finalMap.count, 5)
+        #expect((finalMap.count) == (5))
         for i in 0..<5 {
-            XCTAssertEqual(finalMap["key\(i)"], "value\(i)")
+            #expect((finalMap["key\(i)"]) == ("value\(i)"))
         }
     }
 
+    @Test
     func test_queryAsync() async throws {
         let doc = YDocument()
         let map: YMap<String> = doc.getOrCreateMap(named: "users")
@@ -171,10 +188,11 @@ class YDocumentTests: XCTestCase {
 
         // Test async query
         let results = try await doc.queryAsync("$.users.name")
-        XCTAssertEqual(results.count, 1)
-        XCTAssertEqual(results.first, "\"Alice\"")
+        #expect((results.count) == (1))
+        #expect((results.first) == ("\"Alice\""))
     }
 
+    @Test
     func test_queryAsync_multipleResults() async throws {
         let doc = YDocument()
         let map: YMap<Int> = doc.getOrCreateMap(named: "numbers")
@@ -187,11 +205,12 @@ class YDocumentTests: XCTestCase {
 
         // Query all values in the map
         let results = try await doc.queryAsync("$.numbers.*")
-        XCTAssertEqual(results.count, 3)
+        #expect((results.count) == (3))
     }
 
     // MARK: - Async Subdoc Tests
 
+    @Test
     func test_subdocGuidsAsync() async {
         let parentDoc = YDocument()
         let array: YArray<String> = parentDoc.getOrCreateArray(named: "docs")
@@ -205,11 +224,12 @@ class YDocumentTests: XCTestCase {
         }
 
         let guids = await parentDoc.subdocGuidsAsync()
-        XCTAssertEqual(guids.count, 2)
-        XCTAssertTrue(guids.contains("async-doc-1"))
-        XCTAssertTrue(guids.contains("async-doc-2"))
+        #expect((guids.count) == (2))
+        #expect(guids.contains("async-doc-1"))
+        #expect(guids.contains("async-doc-2"))
     }
 
+    @Test
     func test_subdocsAsync() async {
         let parentDoc = YDocument()
         let array: YArray<String> = parentDoc.getOrCreateArray(named: "docs")
@@ -225,14 +245,15 @@ class YDocumentTests: XCTestCase {
         }
 
         let subdocs = await parentDoc.subdocsAsync()
-        XCTAssertEqual(subdocs.count, 3)
+        #expect((subdocs.count) == (3))
 
         let retrievedGuids = subdocs.map { $0.guid }
-        XCTAssertTrue(retrievedGuids.contains("subdoc-a"))
-        XCTAssertTrue(retrievedGuids.contains("subdoc-b"))
-        XCTAssertTrue(retrievedGuids.contains("subdoc-c"))
+        #expect(retrievedGuids.contains("subdoc-a"))
+        #expect(retrievedGuids.contains("subdoc-b"))
+        #expect(retrievedGuids.contains("subdoc-c"))
     }
 
+    @Test
     func test_subdocsAsync_withData() async {
         let parentDoc = YDocument()
         let array: YArray<String> = parentDoc.getOrCreateArray(named: "docs")
@@ -251,7 +272,7 @@ class YDocumentTests: XCTestCase {
 
         // Retrieve via async subdocs and verify content
         let subdocs = await parentDoc.subdocsAsync()
-        XCTAssertEqual(subdocs.count, 1)
+        #expect((subdocs.count) == (1))
 
         let retrieved = subdocs.first!
         let retrievedText = retrieved.getOrCreateText(named: "content")
@@ -259,6 +280,6 @@ class YDocumentTests: XCTestCase {
             retrievedText.getString(in: txn)
         }
 
-        XCTAssertEqual(content, "Async subdoc content!")
+        #expect((content) == ("Async subdoc content!"))
     }
 }

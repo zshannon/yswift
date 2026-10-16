@@ -1,4 +1,4 @@
-import Yniffi
+@preconcurrency import Yniffi
 
 /// A type that contains a reference to a document and provides a convenience accessor to interacting with transactions from it.
 protocol Transactable {

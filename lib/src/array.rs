@@ -1,6 +1,5 @@
 use crate::doc::{YrsCollectionPtr, YrsDoc};
 use crate::map::YrsMap;
-use crate::subscription::YSubscription;
 use crate::text::YrsText;
 use crate::transaction::YrsTransaction;
 use crate::{change::YrsChange, error::CodingError};
@@ -9,9 +8,10 @@ use std::cell::UnsafeCell;
 use std::fmt::Debug;
 use std::sync::Arc;
 use yrs::branch::Branch;
+use yrs::{Hook, SharedRef};
 use yrs::{Any, Array, ArrayRef, Observable, Out};
 
-pub(crate) struct YrsArray(ReentrantMutex<UnsafeCell<ArrayRef>>);
+pub(crate) struct YrsArray(ReentrantMutex<UnsafeCell<ArrayRef>>, Hook<ArrayRef>);
 
 // Safe because ReentrantMutex provides proper thread synchronization.
 unsafe impl Send for YrsArray {}
@@ -52,7 +52,8 @@ impl AsRef<Branch> for YrsArray {
 
 impl From<ArrayRef> for YrsArray {
     fn from(value: ArrayRef) -> Self {
-        YrsArray(ReentrantMutex::new(UnsafeCell::new(value)))
+        let hook = value.hook();
+        YrsArray(ReentrantMutex::new(UnsafeCell::new(value)), hook)
     }
 }
 
@@ -183,18 +184,22 @@ impl YrsArray {
         arr.as_mut().remove_range(tx, index, len)
     }
 
-    pub(crate) fn observe(&self, delegate: Box<dyn YrsArrayObservationDelegate>) -> Arc<YSubscription> {
-        let mut arr = self.inner();
-        let subscription = arr
-            .as_mut()
-            .observe(move |transaction, text_event| {
-                let delta = text_event.delta(transaction);
-                let result: Vec<YrsChange> =
-                    delta.iter().map(|change| YrsChange::from(change)).collect();
-                delegate.call(result)
-            });
+    pub(crate) fn observe(&self, transaction: &YrsTransaction, key: String, delegate: Box<dyn YrsArrayObservationDelegate>) -> bool {
+        let tx = transaction.transaction();
+        let tx = tx.as_ref().unwrap();
+        let Some(source) = self.1.get(tx) else { return false; };
+        source.observe(key.as_str(), move |transaction, event| {
+            let delta = event.delta(transaction);
+            let result = delta.iter().map(YrsChange::from).collect();
+            delegate.call(result);
+        });
+        true
+    }
 
-            Arc::new(YSubscription::new(subscription))
+    pub(crate) fn unobserve(&self, transaction: &YrsTransaction, key: String) -> bool {
+        let tx = transaction.transaction();
+        let tx = tx.as_ref().unwrap();
+        self.1.get(tx).is_some_and(|source| source.unobserve(key.as_str()))
     }
 
     pub(crate) fn to_a(&self, transaction: &YrsTransaction) -> Vec<String> {
@@ -364,26 +369,5 @@ impl YrsArray {
         Arc::new(YrsText::from(nested))
     }
 
-    /// Moves element from source index to target index.
-    pub(crate) fn move_to(&self, transaction: &YrsTransaction, source: u32, target: u32) {
-        let mut tx = transaction.transaction();
-        let tx = tx.as_mut().unwrap();
-        let mut arr = self.inner();
-        arr.as_mut().move_to(tx, source, target);
-    }
 
-    /// Moves range of elements to target index.
-    pub(crate) fn move_range_to(
-        &self,
-        transaction: &YrsTransaction,
-        start: u32,
-        end: u32,
-        target: u32,
-    ) {
-        use yrs::Assoc;
-        let mut tx = transaction.transaction();
-        let tx = tx.as_mut().unwrap();
-        let mut arr = self.inner();
-        arr.as_mut().move_range_to(tx, start, Assoc::After, end, Assoc::Before, target);
-    }
 }

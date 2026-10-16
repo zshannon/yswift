@@ -1,8 +1,11 @@
-import Combine
 import Foundation
-import Yniffi
+@preconcurrency import Yniffi
 
 /// An undo manager to track and reverse changes on YSwift collections.
+///
+/// The manager can be released during document transactions or observer callbacks.
+/// Destruction cancels its observers without acquiring a document transaction;
+/// native state stays alive until an already-running callback returns.
 ///
 /// Set the one or more origins to track with ``addOrigin(_:)``.
 /// If no origins are set, the undo manager tracks changes from any origin.
@@ -59,34 +62,43 @@ public final class YUndoManager<T: AnyObject> {
         try _manager.clear()
     }
     
-    /// Creates a subscription that is called when the undo manager adds a change.
-    /// - Parameter body: A closure that provides ``UndoEvent`` about the change.
-    /// - Returns: A handle to the subscription.
-    ///
-    /// Cancel the subscription by calling ``unobserveAdded(_:)`` with the subscription Id this method returns.
-    public func observeAdded(_ body: @escaping (UndoEvent, T?) -> T?) -> YSubscription {
+    /// Registers an undo added callback under a key, replacing an existing callback with that key.
+    /// Call outside document transactions and undo callbacks.
+    public func observeAdded(key: String, _ body: @escaping (UndoEvent, T?) -> T?) throws {
         let delegate = YUndoManagerObservationDelegate(callback: body)
-        return YSubscription(subscription: _manager.observeAdded(delegate: delegate))
+        try _manager.observeAdded(key: key, delegate: delegate)
     }
 
-    /// Creates a subscription that is called when the undo manager updates a change.
-    /// - Parameter body: A closure that provides an ``UndoEvent`` about the changes that were updated..
-    /// - Returns: A handle to the subscription.
-    ///
-    /// Call ``unobserveUpdated(_:)`` with the subscription Id this method returns to cancel the subscription.
-    public func observeUpdated(_ body: @escaping (UndoEvent, T?) -> T?) -> YSubscription {
-        let delegate = YUndoManagerObservationDelegate(callback: body)
-        return YSubscription(subscription: _manager.observeUpdated(delegate: delegate))
+    /// Removes an undo added callback. Throws if a transaction or undo callback is active.
+    @discardableResult
+    public func unobserveAdded(key: String) throws -> Bool {
+        try _manager.unobserveAdded(key: key)
     }
 
-    /// Creates a subscription that is called when the undo manager replays a change.
-    /// - Parameter body: A closure that provides an ``UndoEvent`` about the changes being replayed.
-    /// - Returns: A handle to the subscription.
-    ///
-    /// Call ``unobserveUpdated(_:)`` with the subscription Id this method returns to cancel the subscription.
-    public func observePopped(_ body: @escaping (UndoEvent, T?) -> T?) -> YSubscription {
+    /// Registers an undo updated callback under a key, replacing an existing callback with that key.
+    /// Call outside document transactions and undo callbacks.
+    public func observeUpdated(key: String, _ body: @escaping (UndoEvent, T?) -> T?) throws {
         let delegate = YUndoManagerObservationDelegate(callback: body)
-        return YSubscription(subscription: _manager.observePopped(delegate: delegate))
+        try _manager.observeUpdated(key: key, delegate: delegate)
+    }
+
+    /// Removes an undo updated callback. Throws if a transaction or undo callback is active.
+    @discardableResult
+    public func unobserveUpdated(key: String) throws -> Bool {
+        try _manager.unobserveUpdated(key: key)
+    }
+
+    /// Registers an undo popped callback under a key, replacing an existing callback with that key.
+    /// Call outside document transactions and undo callbacks.
+    public func observePopped(key: String, _ body: @escaping (UndoEvent, T?) -> T?) throws {
+        let delegate = YUndoManagerObservationDelegate(callback: body)
+        try _manager.observePopped(key: key, delegate: delegate)
+    }
+
+    /// Removes an undo popped callback. Throws if a transaction or undo callback is active.
+    @discardableResult
+    public func unobservePopped(key: String) throws -> Bool {
+        try _manager.unobservePopped(key: key)
     }
 }
 

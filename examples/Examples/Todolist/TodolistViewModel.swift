@@ -1,4 +1,4 @@
-import Combine
+import Observation
 import MultipeerConnectivity
 import SwiftUI
 import YSwift
@@ -22,9 +22,13 @@ enum ConnectionState: String {
     }
 }
 
-final class TodolistViewModel: ObservableObject {
-    @Published var connectionState: ConnectionState?
-    let items: YArray<TodoItem>
+@MainActor
+@Observable
+final class TodolistViewModel {
+    var connectionState: ConnectionState?
+    private(set) var items: [TodoItem]
+
+    private let sharedItems: YArray<TodoItem>
 
     private let connectionManager: ConnectionManager
     private let document: YDocument
@@ -32,14 +36,17 @@ final class TodolistViewModel: ObservableObject {
     init(connectionManager: ConnectionManager, document: YDocument) {
         self.connectionManager = connectionManager
         self.document = document
-        items = document.getOrCreateArray(named: "TodoItem")
+        sharedItems = document.getOrCreateArray(named: "TodoItem")
+        items = sharedItems.toArray()
 
         connectionManager.onUpdatesReceived = { [weak self] in
-            self?.reloadUI()
+            Task { @MainActor in
+                self?.reloadUI()
+            }
         }
 
         connectionManager.onConnectionStateChanged = { [weak self] sessionState in
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 self?.connectionState = .init(sessionState)
             }
         }
@@ -54,15 +61,14 @@ final class TodolistViewModel: ObservableObject {
     }
 
     func toggleItem(_ item: TodoItem) {
-        guard let index = items.firstIndex(of: item) else { return }
-
         var newItem = item
         newItem.isCompleted.toggle()
 
         let update: Buffer = document.transactSync { [weak self] txn in
             guard let self = self else { return [] }
-            self.items.remove(at: index, transaction: txn)
-            self.items.insert(at: index, value: newItem, transaction: txn)
+            guard let index = sharedItems.toArray(transaction: txn).firstIndex(of: item) else { return [] }
+            self.sharedItems.remove(at: index, transaction: txn)
+            self.sharedItems.insert(at: index, value: newItem, transaction: txn)
             return txn.transactionEncodeUpdate()
         }
 
@@ -72,17 +78,17 @@ final class TodolistViewModel: ObservableObject {
     func addItem(_ item: TodoItem) {
         let update: Buffer = document.transactSync { [weak self] txn in
             guard let self = self else { return [] }
-            self.items.append(item, transaction: txn)
+            self.sharedItems.append(item, transaction: txn)
             return txn.transactionEncodeUpdate()
         }
         propagateUpdate(update)
     }
 
     func removeItem(_ item: TodoItem) {
-        guard let index = items.firstIndex(of: item) else { return }
         let update: Buffer = document.transactSync { [weak self] txn in
             guard let self = self else { return [] }
-            self.items.remove(at: index, transaction: txn)
+            guard let index = sharedItems.toArray(transaction: txn).firstIndex(of: item) else { return [] }
+            self.sharedItems.remove(at: index, transaction: txn)
             return txn.transactionEncodeUpdate()
         }
         propagateUpdate(update)
@@ -95,10 +101,8 @@ final class TodolistViewModel: ObservableObject {
     }
 
     private func reloadUI() {
-        DispatchQueue.main.async {
-            withAnimation(.default) {
-                self.objectWillChange.send()
-            }
+        withAnimation(.default) {
+            items = sharedItems.toArray()
         }
     }
 }

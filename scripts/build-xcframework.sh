@@ -35,12 +35,14 @@ rm -rf "${XCFRAMEWORK_FOLDER}"
 
 mkdir -p "${SWIFT_FOLDER}/scaffold"
 echo "▸ Generate Swift Scaffolding Code"
-cargo run --manifest-path "./Cargo.toml"  \
+cargo run --locked --manifest-path "./Cargo.toml"  \
     --features=uniffi/cli \
     --bin uniffi-bindgen generate \
     "./src/yniffi.udl" \
     --language swift \
     --out-dir "${SWIFT_FOLDER}/scaffold"
+
+sed -i '' 's/[[:blank:]]*$//' "${SWIFT_FOLDER}/scaffold/yniffiFFI.h"
 
 echo "▸ Building for x86_64-apple-ios"
 CFLAGS_x86_64_apple_ios="-target x86_64-apple-ios" \

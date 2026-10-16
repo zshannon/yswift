@@ -1,25 +1,14 @@
-# Yswift
+# YSwift Todo List example
 
-Swifty wrapper for yrs.
+The example uses SwiftUI and Apple's Observation framework, requiring iOS 17 or later.
+Its model publishes a plain array snapshot through `@Observable`; it does not use
+Combine or a custom observation framework.
 
-Uses [Tuist](https://tuist.io/) for Xcode project automation and dependency management.
+The project manifest uses the Tuist 3 API. With Tuist 3.39.3 installed, build the local
+YSwift XCFramework first, then run `tuist fetch` and `tuist generate` from this directory.
+The dependency manifest references this checkout so the example uses the matching
+Swift bindings and native framework.
 
-## Getting started
-
-### Install tuist
-```
-curl -Ls https://install.tuist.io | bash
-```
-
-### Fetch dependencies and generate project
-```
-tuist fetch && tuist generate
-```
-
-## Notes
-
-This project depends on SPM package generated in [`uniffi/lib`](https://github.com/y-crdt/y-uniffi/tree/main/lib). For now it is referenced using local paths.
-
-## Thanks
-
-Huge shout-out goes to Joe ([heckj](https://github.com/heckj)) for his [work on initial prototype of Yrs port for Swift](https://github.com/heckj/YrsC).
+The existing MultipeerConnectivity demonstration uses YSwift's synchronous protocol
+APIs consistently. New clients should use async document transactions and
+`await collection.observeAsync()` as shown in the repository README.

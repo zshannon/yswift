@@ -1,6 +1,5 @@
-import Combine
 import Foundation
-import Yniffi
+@preconcurrency import Yniffi
 
 /// A type that provides a text-oriented shared data type.
 ///
@@ -40,8 +39,9 @@ public final class YText: Transactable, YCollection, @unchecked Sendable {
     ///   - attributes: The attributes to associate with the string.
     ///   - index: The position to insert at.
     public func insertWithAttributes(_ text: String, attributes: [String: Any], at index: UInt32) async {
+        let encodedAttributes = Coder.encoded(attributes)
         await document.transact { txn in
-            self._text.insertWithAttributes(tx: txn, index: index, chunk: text, attrs: Coder.encoded(attributes))
+            self._text.insertWithAttributes(tx: txn, index: index, chunk: text, attrs: encodedAttributes)
         }
     }
 
@@ -61,8 +61,9 @@ public final class YText: Transactable, YCollection, @unchecked Sendable {
     ///   - attributes: The attributes to associate with the embedded type.
     ///   - index: The position to embed at.
     public func insertEmbedWithAttributes<T: Encodable & Sendable>(_ embed: T, attributes: [String: Any], at index: UInt32) async {
+        let encodedAttributes = Coder.encoded(attributes)
         await document.transact { txn in
-            self._text.insertEmbedWithAttributes(tx: txn, index: index, content: Coder.encoded(embed), attrs: Coder.encoded(attributes))
+            self._text.insertEmbedWithAttributes(tx: txn, index: index, content: Coder.encoded(embed), attrs: encodedAttributes)
         }
     }
 
@@ -72,8 +73,9 @@ public final class YText: Transactable, YCollection, @unchecked Sendable {
     ///   - length: The length of characters to update.
     ///   - attributes: The attributes to associate.
     public func format(at index: UInt32, length: UInt32, attributes: [String: Any]) async {
+        let encodedAttributes = Coder.encoded(attributes)
         await document.transact { txn in
-            self._text.format(tx: txn, index: index, length: length, attrs: Coder.encoded(attributes))
+            self._text.format(tx: txn, index: index, length: length, attrs: encodedAttributes)
         }
     }
 
@@ -102,15 +104,17 @@ public final class YText: Transactable, YCollection, @unchecked Sendable {
     }
 
     /// Returns an async stream of text changes.
-    public func observeAsync() -> AsyncStream<[YTextChange]> {
-        AsyncStream(bufferingPolicy: .unbounded) { continuation in
-            let subscription = self.observe { changes in
-                continuation.yield(changes)
-            }
-            continuation.onTermination = { _ in
-                subscription.cancel()
-            }
+    public func observeAsync() async -> AsyncStream<[YTextChange]> {
+        let key = UUID().uuidString
+        let (stream, continuation) = AsyncStream<[YTextChange]>.makeStream(bufferingPolicy: .unbounded)
+        let observing = await document.transact { transaction in
+            self.observe(key: key, transaction: transaction) { continuation.yield($0) }
         }
+        continuation.onTermination = { _ in
+            Task { await self.unobserveAsync(key: key) }
+        }
+        if !observing { continuation.finish() }
+        return stream
     }
 
     /// Applies a delta asynchronously.
@@ -133,16 +137,17 @@ public final class YText: Transactable, YCollection, @unchecked Sendable {
 
     /// Returns the text content as diff chunks asynchronously.
     public func diffAsync() async -> [YTextDiff] {
-        await document.transact { txn in
-            self._text.diff(tx: txn).map { yrsDiff in
-                switch yrsDiff {
-                case let .text(value, attrs):
-                    return YTextDiff.text(value: value, attributes: Coder.decoded(attrs))
-                case let .embed(value, attrs):
-                    return YTextDiff.embed(value: value, attributes: Coder.decoded(attrs))
-                case let .other(attrs):
-                    return YTextDiff.other(attributes: Coder.decoded(attrs))
-                }
+        let differences = await document.transact { txn in
+            self._text.diff(tx: txn)
+        }
+        return differences.map { yrsDiff in
+            switch yrsDiff {
+            case let .text(value, attrs):
+                return YTextDiff.text(value: value, attributes: Coder.decoded(attrs))
+            case let .embed(value, attrs):
+                return YTextDiff.embed(value: value, attributes: Coder.decoded(attrs))
+            case let .other(attrs):
+                return YTextDiff.other(attributes: Coder.decoded(attrs))
             }
         }
     }
@@ -325,32 +330,32 @@ public final class YText: Transactable, YCollection, @unchecked Sendable {
         }
     }
 
-    /// Returns a publisher of changes for the text.
-    /// - Warning: Deprecated. Use `observeAsync()` instead.
-    @available(*, deprecated, message: "Use observeAsync() instead")
-    public func observe() -> AnyPublisher<[YTextChange], Never> {
-        let subject = PassthroughSubject<[YTextChange], Never>()
-        let subscription = observe { subject.send($0) }
-        return subject.handleEvents(receiveCancel: {
-            subscription.cancel()
-        })
-        .eraseToAnyPublisher()
-    }
+
 
     /// Registers a closure that is called with an array of changes to the text.
     /// - Warning: Deprecated. Use `observeAsync()` instead.
     /// - Parameter callback: The closure to process reported changes from the text.
-    /// - Returns: An observer identifier that you can use to stop observing the text.
-    @available(*, deprecated, message: "Use observeAsync() instead")
-    public func observe(_ callback: @escaping ([YTextChange]) -> Void) -> YSubscription {
-        YSubscription(
-            subscription: _text.observe(
-                delegate: YTextObservationDelegate(
-                    callback: callback,
-                    decoded: Coder.decoded(_:)
-                )
-            )
-        )
+    /// The key replaces any existing observer with the same key. Use this collection's document transaction.
+    /// - Returns: False if the collection has been deleted.
+    @discardableResult
+    public func observe(key: String, transaction: YrsTransaction, _ body: @escaping (sending [YTextChange]) -> Void) -> Bool {
+        let delegate = YTextObservationDelegate(callback: body)
+        return _text.observe(tx: transaction, key: key, delegate: delegate)
+    }
+
+    /// Removes the observer registered under `key`. Use a transaction from this collection's document.
+    /// Returns false if the collection was deleted or the key was not registered.
+    @discardableResult
+    public func unobserve(key: String, transaction: YrsTransaction) -> Bool {
+        _text.unobserve(tx: transaction, key: key)
+    }
+
+    /// Removes an observer on the document's async transaction queue.
+    @discardableResult
+    public func unobserveAsync(key: String) async -> Bool {
+        await document.transact { transaction in
+            self.unobserve(key: key, transaction: transaction)
+        }
     }
     
     public func pointer() -> YrsCollectionPtr {
@@ -427,26 +432,23 @@ extension YText: CustomStringConvertible {
 }
 
 class YTextObservationDelegate: YrsTextObservationDelegate {
-    private var callback: ([YTextChange]) -> Void
-    private var decoded: (String) -> [String: Any]
+    private var callback: (sending [YTextChange]) -> Void
 
-    init(
-        callback: @escaping ([YTextChange]) -> Void,
-        decoded: @escaping (String) -> [String: Any]
-    ) {
+    init(callback: @escaping (sending [YTextChange]) -> Void) {
         self.callback = callback
-        self.decoded = decoded
     }
 
     func call(value: [YrsDelta]) {
-        let result: [YTextChange] = value.map { rsChange -> YTextChange in
-            switch rsChange {
+        // Build fresh values without carrying the borrowed FFI array's isolation region.
+        var result: [YTextChange] = []
+        for change in value {
+            switch change {
             case let .inserted(value, attrs):
-                return YTextChange.inserted(value: value, attributes: decoded(attrs))
+                result.append(.inserted(value: value, attributes: Coder.decoded(attrs)))
             case let .retained(index, attrs):
-                return YTextChange.retained(index: index, attributes: decoded(attrs))
+                result.append(.retained(index: index, attributes: Coder.decoded(attrs)))
             case let .deleted(index):
-                return YTextChange.deleted(index: index)
+                result.append(.deleted(index: index))
             }
         }
         callback(result)

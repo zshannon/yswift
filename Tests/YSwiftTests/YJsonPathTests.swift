@@ -1,12 +1,14 @@
 import Foundation
-import XCTest
+import Testing
 import Yniffi
 @testable import YSwift
 
-class YJsonPathTests: XCTestCase {
+@Suite
+final class YJsonPathTests {
 
     // MARK: - Basic Query Tests
 
+    @Test
     func test_queryRootMap() throws {
         let doc = YDocument()
         let map: YMap<String> = doc.getOrCreateMap(named: "user")
@@ -15,11 +17,12 @@ class YJsonPathTests: XCTestCase {
         }
 
         let results = try doc.query("$.user")
-        XCTAssertEqual(results.count, 1)
+        #expect((results.count) == (1))
         // The result should be a JSON object with name: "Alice"
-        XCTAssertTrue(results[0].contains("Alice"))
+        #expect(results[0].contains("Alice"))
     }
 
+    @Test
     func test_queryMapField() throws {
         let doc = YDocument()
         let map: YMap<String> = doc.getOrCreateMap(named: "user")
@@ -29,10 +32,11 @@ class YJsonPathTests: XCTestCase {
         }
 
         let results = try doc.query("$.user.name")
-        XCTAssertEqual(results.count, 1)
-        XCTAssertEqual(results[0], "\"Bob\"")
+        #expect((results.count) == (1))
+        #expect((results[0]) == ("\"Bob\""))
     }
 
+    @Test
     func test_queryArray() throws {
         let doc = YDocument()
         let array: YArray<String> = doc.getOrCreateArray(named: "items")
@@ -44,13 +48,14 @@ class YJsonPathTests: XCTestCase {
 
         // Query using wildcard to get individual elements instead of the array itself
         let results = try doc.query("$.items[*]")
-        XCTAssertEqual(results.count, 3)
+        #expect((results.count) == (3))
         // Each result is a JSON-encoded string
-        XCTAssertEqual(results[0], "\"first\"")
-        XCTAssertEqual(results[1], "\"second\"")
-        XCTAssertEqual(results[2], "\"third\"")
+        #expect((results[0]) == ("\"first\""))
+        #expect((results[1]) == ("\"second\""))
+        #expect((results[2]) == ("\"third\""))
     }
 
+    @Test
     func test_queryArrayIndex() throws {
         let doc = YDocument()
         let array: YArray<String> = doc.getOrCreateArray(named: "items")
@@ -61,10 +66,11 @@ class YJsonPathTests: XCTestCase {
         }
 
         let results = try doc.query("$.items[1]")
-        XCTAssertEqual(results.count, 1)
-        XCTAssertEqual(results[0], "\"banana\"")
+        #expect((results.count) == (1))
+        #expect((results[0]) == ("\"banana\""))
     }
 
+    @Test
     func test_queryArrayWildcard() throws {
         let doc = YDocument()
         let array: YArray<String> = doc.getOrCreateArray(named: "items")
@@ -75,14 +81,15 @@ class YJsonPathTests: XCTestCase {
         }
 
         let results = try doc.query("$.items[*]")
-        XCTAssertEqual(results.count, 3)
-        XCTAssertEqual(results[0], "\"one\"")
-        XCTAssertEqual(results[1], "\"two\"")
-        XCTAssertEqual(results[2], "\"three\"")
+        #expect((results.count) == (3))
+        #expect((results[0]) == ("\"one\""))
+        #expect((results[1]) == ("\"two\""))
+        #expect((results[2]) == ("\"three\""))
     }
 
     // MARK: - Text Query Tests
 
+    @Test
     func test_queryText() throws {
         let doc = YDocument()
         let text = doc.getOrCreateText(named: "content")
@@ -91,12 +98,13 @@ class YJsonPathTests: XCTestCase {
         }
 
         let results = try doc.query("$.content")
-        XCTAssertEqual(results.count, 1)
-        XCTAssertEqual(results[0], "\"Hello, World!\"")
+        #expect((results.count) == (1))
+        #expect((results[0]) == ("\"Hello, World!\""))
     }
 
     // MARK: - Nested Query Tests
 
+    @Test
     func test_queryNestedStructure() throws {
         let doc = YDocument()
         let users: YArray<String> = doc.getOrCreateArray(named: "users")
@@ -108,30 +116,33 @@ class YJsonPathTests: XCTestCase {
         }
 
         let results = try doc.query("$.users[*]")
-        XCTAssertEqual(results.count, 2)
+        #expect((results.count) == (2))
     }
 
     // MARK: - Error Handling Tests
 
+    @Test
     func test_invalidPathThrows() {
         let doc = YDocument()
         let _: YMap<String> = doc.getOrCreateMap(named: "test")
 
-        XCTAssertThrowsError(try doc.query("invalid path syntax!!!")) { error in
-            XCTAssertTrue(error is YrsJsonPathError)
+        #expect(throws: YrsJsonPathError.self) {
+            try doc.query("invalid path syntax!!!")
         }
     }
 
+    @Test
     func test_emptyPathReturnsEmpty() throws {
         let doc = YDocument()
 
         // Empty path is technically valid but returns no results
         let results = try doc.query("")
-        XCTAssertEqual(results.count, 0)
+        #expect((results.count) == (0))
     }
 
     // MARK: - Empty Results Tests
 
+    @Test
     func test_queryNonExistentPath() throws {
         let doc = YDocument()
         let map: YMap<String> = doc.getOrCreateMap(named: "data")
@@ -140,11 +151,12 @@ class YJsonPathTests: XCTestCase {
         }
 
         let results = try doc.query("$.nonexistent")
-        XCTAssertEqual(results.count, 0)
+        #expect((results.count) == (0))
     }
 
     // MARK: - Transaction Tests
 
+    @Test
     func test_queryWithExplicitTransaction() throws {
         let doc = YDocument()
         let map: YMap<String> = doc.getOrCreateMap(named: "test")
@@ -154,13 +166,14 @@ class YJsonPathTests: XCTestCase {
             return try? doc.query("$.test.greeting", transaction: txn)
         }
 
-        XCTAssertNotNil(results)
-        XCTAssertEqual(results?.count, 1)
-        XCTAssertEqual(results?[0], "\"hello\"")
+        #expect(results != nil)
+        #expect((results?.count) == (1))
+        #expect((results?[0]) == ("\"hello\""))
     }
 
     // MARK: - Array Slice Tests
 
+    @Test
     func test_queryArraySlice() throws {
         let doc = YDocument()
         let array: YArray<Int> = doc.getOrCreateArray(named: "numbers")
@@ -173,13 +186,14 @@ class YJsonPathTests: XCTestCase {
         }
 
         let results = try doc.query("$.numbers[1:3]")
-        XCTAssertEqual(results.count, 2)
-        XCTAssertEqual(results[0], "2")
-        XCTAssertEqual(results[1], "3")
+        #expect((results.count) == (2))
+        #expect((results[0]) == ("2"))
+        #expect((results[1]) == ("3"))
     }
 
     // MARK: - Recursive Descent Tests
 
+    @Test
     func test_queryRecursiveDescent() throws {
         let doc = YDocument()
         let map: YMap<String> = doc.getOrCreateMap(named: "data")
@@ -189,6 +203,6 @@ class YJsonPathTests: XCTestCase {
 
         // This should find "name" at any depth
         let results = try doc.query("$..name")
-        XCTAssertGreaterThanOrEqual(results.count, 1)
+        #expect((results.count) >= (1))
     }
 }

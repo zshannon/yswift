@@ -2,7 +2,6 @@ use crate::array::YrsArray;
 use crate::error::CodingError;
 use crate::map::YrsMap;
 use crate::subdoc::{YrsDestroyObservationDelegate, YrsDocOptions, YrsSubdocsEvent, YrsSubdocsObservationDelegate};
-use crate::subscription::YSubscription;
 use crate::text::YrsText;
 use crate::transaction::YrsTransaction;
 use crate::undo::YrsUndoManager;
@@ -92,13 +91,11 @@ impl YrsDoc {
 
     pub(crate) fn undo_manager(&self, tracked_refs: Vec<YrsCollectionPtr>) -> Arc<YrsUndoManager> {
         let doc = self.doc();
-        let mut i = tracked_refs.into_iter();
-        let first = i.next().unwrap();
-        let mut undo_manager = yrs::undo::UndoManager::new(doc.as_ref(), &first);
-        while let Some(n) = i.next() {
-            undo_manager.expand_scope(&n);
+        let mut undo_manager = yrs::undo::UndoManager::new();
+        for tracked_ref in tracked_refs {
+            undo_manager.expand_scope(doc.as_ref(), &tracked_ref);
         }
-        Arc::new(YrsUndoManager::from(undo_manager))
+        Arc::new(YrsUndoManager::new(undo_manager, doc.as_ref().clone()))
     }
 
     // MARK: - Subdoc methods
@@ -110,14 +107,14 @@ impl YrsDoc {
 
     /// Returns the client ID for this document.
     pub(crate) fn client_id(&self) -> u64 {
-        self.doc().as_ref().client_id()
+        self.doc().as_ref().client_id().get()
     }
 
     /// Destroys this subdocument within the parent transaction.
     pub(crate) fn destroy(&self, parent_txn: &YrsTransaction) {
         let mut tx = parent_txn.transaction();
         if let Some(tx) = tx.as_mut() {
-            self.doc().as_ref().destroy(tx);
+            self.doc().as_ref().destroy(Some(tx));
         }
     }
 
@@ -139,7 +136,7 @@ impl YrsDoc {
         let mut opts = Options::default();
         opts.auto_load = options.auto_load;
         if let Some(client_id) = options.client_id {
-            opts.client_id = client_id;
+            opts.client_id = yrs::ClientID::new(client_id);
         }
         if let Some(guid) = options.guid {
             opts.guid = Arc::from(guid.as_str());
@@ -150,31 +147,38 @@ impl YrsDoc {
         Self(ReentrantMutex::new(UnsafeCell::new(Doc::with_options(opts))))
     }
 
+    pub(crate) fn unobserve_destroy(&self, transaction: &YrsTransaction, key: String) -> bool {
+        let tx = transaction.transaction();
+        tx.as_ref().unwrap().unobserve_destroy(key.as_str())
+    }
+
     /// Observes when this document is destroyed.
     pub(crate) fn observe_destroy(
         &self,
+        transaction: &YrsTransaction,
+        key: String,
         delegate: Box<dyn YrsDestroyObservationDelegate>,
-    ) -> Arc<YSubscription> {
-        let doc = self.doc();
-        let subscription = doc
-            .as_ref()
-            .observe_destroy(move |_txn, _doc| {
+    ) {
+        let mut tx = transaction.transaction();
+        tx.as_mut().unwrap().observe_destroy(key.as_str(), move |_txn, _doc| {
                 delegate.call();
-            })
-            .expect("Failed to observe destroy");
+            });
+    }
 
-        Arc::new(YSubscription::new(subscription))
+    pub(crate) fn unobserve_subdocs(&self, transaction: &YrsTransaction, key: String) -> bool {
+        let tx = transaction.transaction();
+        tx.as_ref().unwrap().unobserve_subdocs(key.as_str())
     }
 
     /// Observes subdocument lifecycle changes (added, loaded, removed).
     pub(crate) fn observe_subdocs(
         &self,
+        transaction: &YrsTransaction,
+        key: String,
         delegate: Box<dyn YrsSubdocsObservationDelegate>,
-    ) -> Arc<YSubscription> {
-        let doc = self.doc();
-        let subscription = doc
-            .as_ref()
-            .observe_subdocs(move |_txn, event| {
+    ) {
+        let mut tx = transaction.transaction();
+        tx.as_mut().unwrap().observe_subdocs(key.as_str(), move |_txn, event| {
                 let added: Vec<Arc<YrsDoc>> = event
                     .added()
                     .map(|d| Arc::new(YrsDoc::from_doc(d.clone())))
@@ -192,10 +196,7 @@ impl YrsDoc {
                     loaded,
                     removed,
                 });
-            })
-            .expect("Failed to observe subdocs");
-
-        Arc::new(YSubscription::new(subscription))
+            });
     }
 
     /// Returns the parent document if this is a subdocument.

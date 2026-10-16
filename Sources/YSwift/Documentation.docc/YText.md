@@ -32,7 +32,8 @@ await text.insertWithAttributes("styled", attributes: ["color": "red"], at: 0)
 await text.removeRange(start: 0, length: 6)
 
 // Observe changes
-for await changes in text.observeAsync() {
+let events = await text.observeAsync()
+for await changes in events {
     for change in changes {
         switch change {
         case .inserted(let value, let attrs):
@@ -76,8 +77,8 @@ for await changes in text.observeAsync() {
 - ``YSwift/YText/length(in:)``
 - ``YSwift/YText/diff(in:)``
 - ``YSwift/YText/applyDelta(_:in:)``
-- ``YSwift/YText/observe()``
-- ``YSwift/YText/observe(_:)``
+- ``YSwift/YText/observeAsync()``
+- ``YSwift/YText/observe(key:transaction:_:)``
 
 ### Inspecting the Text
 

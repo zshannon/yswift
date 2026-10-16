@@ -54,8 +54,8 @@ echo "📝 Updating Package.swift..."
 DOWNLOAD_URL="https://github.com/$REPO/releases/download/$VERSION/yniffiFFI.xcframework.zip"
 
 # Update the URL and checksum in Package.swift
-sed -i '' "s|url: \"https://github.com/.*/releases/download/.*/yniffiFFI.xcframework.zip\"|url: \"$DOWNLOAD_URL\"|" Package.swift
-sed -i '' "s|checksum: \"[a-f0-9]*\"|checksum: \"$CHECKSUM\"|" Package.swift
+sed -i '' "s|^let binaryURL: String? = .*|let binaryURL: String? = \"$DOWNLOAD_URL\"|" Package.swift
+sed -i '' "s|^let binaryChecksum = .*|let binaryChecksum = \"$CHECKSUM\"|" Package.swift
 
 echo "   URL: $DOWNLOAD_URL"
 echo "   Checksum: $CHECKSUM"

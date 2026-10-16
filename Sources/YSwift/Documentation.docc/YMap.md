@@ -32,9 +32,10 @@ let allKeys = await map.keys()
 let allValues = await map.values()
 
 // Observe changes
-for await changes in map.observeAsync() {
+let events = await map.observeAsync()
+for await changes in events {
     for change in changes {
-        print("Key \(change.key) changed")
+        print(change)
     }
 }
 ```
@@ -64,8 +65,8 @@ for await changes in map.observeAsync() {
 - ``YSwift/YMap/updateValue(_:forKey:transaction:)``
 - ``YSwift/YMap/removeValue(forKey:transaction:)``
 - ``YSwift/YMap/removeAll(transaction:)``
-- ``YSwift/YMap/observe()``
-- ``YSwift/YMap/observe(_:)``
+- ``YSwift/YMap/observeAsync()``
+- ``YSwift/YMap/observe(key:transaction:_:)``
 
 ### Iterating over a Map
 

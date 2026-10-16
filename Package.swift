@@ -1,58 +1,17 @@
-// swift-tools-version:5.6
+// swift-tools-version:6.0
 
 import PackageDescription
 import Foundation
 
-var globalSwiftSettings: [PackageDescription.SwiftSetting] = []
-
-// Only enable if Swift 5.7+ is available and the environment variable `LOCALDEV` is
-// set to a value (such as 'true')
-#if swift(>=5.7)
-    if ProcessInfo.processInfo.environment["YSWIFT_LOCAL"] != nil {
-        /*
-        Summation from https://www.donnywals.com/enabling-concurrency-warnings-in-xcode-14/
-        Set `strict-concurrency` to `targeted` to enforce Sendable and actor-isolation
-        checks in your code. This explicitly verifies that `Sendable` constraints are
-        met when you mark one of your types as `Sendable`.
-
-        This mode is essentially a bit of a hybrid between the behavior that's intended
-        in Swift 6, and the default in Swift 5.7. Use this mode to have a bit of
-        checking on your code that uses Swift concurrency without too many warnings
-        and / or errors in your current codebase.
-
-        Set `strict-concurrency` to `complete` to get the full suite of concurrency
-        constraints, essentially as they will work in Swift 6.
-        */
-        globalSwiftSettings.append(.unsafeFlags(["-Xfrontend", "-strict-concurrency=complete"]))
-    }
-#endif
-
+// Unreleased source checkouts use the locally built framework. The release script
+// sets these two values only when preparing a matching published binary.
+let binaryURL: String? = "https://github.com/zshannon/yswift/releases/download/0.6.0/yniffiFFI.xcframework.zip"
+let binaryChecksum = "968195a90558a5ad7638ea6545c99aa5c16a23a05272a45e1beb0ba462c5f434"
 let FFIbinaryTarget: PackageDescription.Target
-// If either the environment variable `YSWIFT_LOCAL` is set to any value, the packages uses
-// a local reference to an XCFramework file (built from `./scripts/build-xcframework.sh`)
-// rather than the previous released version.
-//
-// The script `./scripts/build-xcframework.sh` _does_ expect that you have Rust
-// installed locally in order to function.
-if ProcessInfo.processInfo.environment["YSWIFT_LOCAL"] != nil {
-    // We are using a local file reference to an XCFramework, which is functional
-    // on the tags for this package because the XCFramework.zip file is committed with
-    // those specific release points. This does, however, cause a few awkward issues,
-    // in particular it means that swift-docc-plugin doesn't operate correctly as the
-    // process to retrieve the symbols from this and the XCFramework fails within
-    // Swift Package Manager. Building documentation within Xcode works perfectly fine,
-    // but if you're attempting to generate HTML documentation, use the script
-    // `./scripts/build-ghpages-docs.sh`.
-    FFIbinaryTarget = .binaryTarget(
-            name: "yniffiFFI",
-            path: "./lib/yniffiFFI.xcframework"
-    )
+if let binaryURL, ProcessInfo.processInfo.environment["YSWIFT_LOCAL"] == nil {
+    FFIbinaryTarget = .binaryTarget(name: "yniffiFFI", url: binaryURL, checksum: binaryChecksum)
 } else {
-    FFIbinaryTarget = .binaryTarget(
-            name: "yniffiFFI",
-            url: "https://github.com/zshannon/yswift/releases/download/0.5.7/yniffiFFI.xcframework.zip",
-            checksum: "41473edfbb85656b904a99107600fd4738150a6fa93142b1ef04e207731ef13c"
-    )
+    FFIbinaryTarget = .binaryTarget(name: "yniffiFFI", path: "./lib/yniffiFFI.xcframework")
 }
 
 let package = Package(
@@ -78,11 +37,13 @@ let package = Package(
                 "Yniffi",
                 .product(name: "Queue", package: "Queue"),
             ],
-            swiftSettings: globalSwiftSettings
+            swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .testTarget(
             name: "YSwiftTests",
-            dependencies: ["YSwift"]
+            dependencies: ["YSwift"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
         ),
-    ]
+    ],
+    swiftLanguageModes: [.v5]
 )

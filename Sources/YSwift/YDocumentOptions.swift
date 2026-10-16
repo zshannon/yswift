@@ -1,11 +1,11 @@
-import Yniffi
+@preconcurrency import Yniffi
 
 /// Options for creating a YDocument with custom configuration.
 public struct YDocumentOptions: Sendable {
     /// When set to true, the document will automatically load when accessed as a subdocument.
     public var autoLoad: Bool
 
-    /// A custom client ID for this document. If not provided, a random one will be generated.
+    /// A custom 53-bit client ID (0 through 2^53 - 1) for this document. If not provided, a random one will be generated.
     public var clientId: UInt64?
 
     /// A custom GUID for this document. If not provided, a random UUID will be generated.

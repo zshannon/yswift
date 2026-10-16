@@ -1,6 +1,5 @@
-import Combine
 import Foundation
-import Yniffi
+@preconcurrency import Yniffi
 
 /// A type that provides a list shared data type.
 ///
@@ -100,15 +99,17 @@ public final class YArray<T: Codable>: Transactable, YCollection, @unchecked Sen
     }
 
     /// Returns an async stream of array changes.
-    public func observeAsync() -> AsyncStream<[YArrayChange<T>]> where T: Sendable {
-        AsyncStream(bufferingPolicy: .unbounded) { continuation in
-            let subscription = self.observe { changes in
-                continuation.yield(changes)
-            }
-            continuation.onTermination = { _ in
-                subscription.cancel()
-            }
+    public func observeAsync() async -> AsyncStream<[YArrayChange<T>]> where T: Sendable {
+        let key = UUID().uuidString
+        let (stream, continuation) = AsyncStream<[YArrayChange<T>]>.makeStream(bufferingPolicy: .unbounded)
+        let observing = await document.transact { transaction in
+            self.observe(key: key, transaction: transaction) { continuation.yield($0) }
         }
+        continuation.onTermination = { _ in
+            Task { await self.unobserveAsync(key: key) }
+        }
+        if !observing { continuation.finish() }
+        return stream
     }
 
     // MARK: - Sync APIs (Deprecated)
@@ -248,26 +249,32 @@ public final class YArray<T: Codable>: Transactable, YCollection, @unchecked Sen
         }
     }
 
-    /// Returns a publisher of array changes.
-    /// - Warning: Deprecated. Use `observeAsync()` instead.
-    @available(*, deprecated, message: "Use observeAsync() instead")
-    public func observe() -> AnyPublisher<[YArrayChange<T>], Never> {
-        let subject = PassthroughSubject<[YArrayChange<T>], Never>()
-        let subscription = observe { subject.send($0) }
-        return subject.handleEvents(receiveCancel: {
-            subscription.cancel()
-        })
-        .eraseToAnyPublisher()
-    }
+
 
     /// Registers a closure that is called with an array of changes to the list.
     /// - Warning: Deprecated. Use `observeAsync()` instead.
     /// - Parameter body: A closure that is called with an array of list changes.
-    /// - Returns: An observer identifier.
-    @available(*, deprecated, message: "Use observeAsync() instead")
-    public func observe(_ body: @escaping ([YArrayChange<T>]) -> Void) -> YSubscription {
+    /// The key replaces any existing observer with the same key. Use this collection's document transaction.
+    /// - Returns: False if the collection has been deleted.
+    @discardableResult
+    public func observe(key: String, transaction: YrsTransaction, _ body: @escaping ([YArrayChange<T>]) -> Void) -> Bool {
         let delegate = YArrayObservationDelegate(callback: body, decoded: Coder.decodedArray)
-        return YSubscription(subscription: _array.observe(delegate: delegate))
+        return _array.observe(tx: transaction, key: key, delegate: delegate)
+    }
+
+    /// Removes the observer registered under `key`. Use a transaction from this collection's document.
+    /// Returns false if the collection was deleted or the key was not registered.
+    @discardableResult
+    public func unobserve(key: String, transaction: YrsTransaction) -> Bool {
+        _array.unobserve(tx: transaction, key: key)
+    }
+
+    /// Removes an observer on the document's async transaction queue.
+    @discardableResult
+    public func unobserveAsync(key: String) async -> Bool where T: Sendable {
+        await document.transact { transaction in
+            self.unobserve(key: key, transaction: transaction)
+        }
     }
     
     public func pointer() -> YrsCollectionPtr {
@@ -408,6 +415,8 @@ extension YArrayChange: Equatable where T: Equatable {
 
 extension YArrayChange: Hashable where T: Hashable {}
 
+extension YArrayChange: Sendable where T: Sendable {}
+
 // MARK: - Subdocument Support
 
 extension YArray {
@@ -516,17 +525,5 @@ extension YArray {
         }
     }
 
-    /// Moves element from source index to target index.
-    public func move(from source: Int, to target: Int, transaction: YrsTransaction? = nil) {
-        withTransaction(transaction) { txn in
-            self._array.moveTo(tx: txn, source: UInt32(source), target: UInt32(target))
-        }
-    }
 
-    /// Moves range of elements to target index.
-    public func moveRange(from start: Int, to end: Int, target: Int, transaction: YrsTransaction? = nil) {
-        withTransaction(transaction) { txn in
-            self._array.moveRangeTo(tx: txn, start: UInt32(start), end: UInt32(end), target: UInt32(target))
-        }
-    }
 }

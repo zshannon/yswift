@@ -5,7 +5,7 @@ let exampleTodolist = Target(
     platform: .iOS,
     product: .app,
     bundleId: "y-crdt.swift.example.todolist",
-    deploymentTarget: .iOS(targetVersion: "15.0", devices: .iphone),
+    deploymentTarget: .iOS(targetVersion: "17.0", devices: .iphone),
     infoPlist: .extendingDefault(with: [
         "UILaunchStoryboardName": "LaunchScreen",
         "NSLocalNetworkUsageDescription": "TodoListExample needs to use your phone’s data to discover devices nearby",

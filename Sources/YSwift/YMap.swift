@@ -1,7 +1,6 @@
-import Combine
 import Foundation
 import Queue
-import Yniffi
+@preconcurrency import Yniffi
 
 /// A type that provides a map shared data type.
 ///
@@ -301,22 +300,31 @@ public final class YMap<T: Codable>: Transactable, YCollection, @unchecked Senda
         }
     }
 
-    /// Returns a publisher of map changes.
-    public func observe() -> AnyPublisher<[YMapChange<T>], Never> {
-        let subject = PassthroughSubject<[YMapChange<T>], Never>()
-        let subscription = observe { subject.send($0) }
-        return subject.handleEvents(receiveCancel: {
-            subscription.cancel()
-        })
-        .eraseToAnyPublisher()
-    }
+
 
     /// Registers a closure that is called with an array of changes to the map.
     /// - Parameter body: A closure that is called with an array of map changes.
-    /// - Returns: An observer identifier.
-    public func observe(_ body: @escaping ([YMapChange<T>]) -> Void) -> YSubscription {
+    /// The key replaces any existing observer with the same key. Use this collection's document transaction.
+    /// - Returns: False if the collection has been deleted.
+    @discardableResult
+    public func observe(key: String, transaction: YrsTransaction, _ body: @escaping ([YMapChange<T>]) -> Void) -> Bool {
         let delegate = YMapObservationDelegate(decoded: Coder.decoded, callback: body)
-        return YSubscription(subscription: _map.observe(delegate: delegate))
+        return _map.observe(tx: transaction, key: key, delegate: delegate)
+    }
+
+    /// Removes the observer registered under `key`. Use a transaction from this collection's document.
+    /// Returns false if the collection was deleted or the key was not registered.
+    @discardableResult
+    public func unobserve(key: String, transaction: YrsTransaction) -> Bool {
+        _map.unobserve(tx: transaction, key: key)
+    }
+
+    /// Removes an observer on the document's async transaction queue.
+    @discardableResult
+    public func unobserveAsync(key: String) async -> Bool where T: Sendable {
+        await document.transact { transaction in
+            self.unobserve(key: key, transaction: transaction)
+        }
     }
 
     /// Returns an async stream of map changes.
@@ -325,27 +333,24 @@ public final class YMap<T: Codable>: Transactable, YCollection, @unchecked Senda
     /// making it safe to read document state from within the stream consumer.
     ///
     /// ```swift
-    /// for await changes in map.observeAsync() {
+    /// for await changes in await map.observeAsync() {
     ///     // Safe to call transactSync or read state here
     ///     let currentState = map.toMap()
     /// }
     /// ```
     ///
     /// - TODO: Support queue priority argument as optional parameter (e.g. `.high`, `.userInitiated`)
-    public func observeAsync() -> AsyncStream<[YMapChange<T>]> where T: Sendable {
-        // Use unbounded buffering to avoid blocking the synchronous observer callback
-        AsyncStream(bufferingPolicy: .unbounded) { continuation in
-            let subscription = observe { changes in
-                // Called synchronously during transaction.
-                // Yield directly - the unbounded buffer ensures we don't block.
-                // Changes will be delivered asynchronously to the consumer.
-                continuation.yield(changes)
-            }
-
-            continuation.onTermination = { _ in
-                subscription.cancel()
-            }
+    public func observeAsync() async -> AsyncStream<[YMapChange<T>]> where T: Sendable {
+        let key = UUID().uuidString
+        let (stream, continuation) = AsyncStream<[YMapChange<T>]>.makeStream(bufferingPolicy: .unbounded)
+        let observing = await document.transact { transaction in
+            self.observe(key: key, transaction: transaction) { continuation.yield($0) }
         }
+        continuation.onTermination = { _ in
+            Task { await self.unobserveAsync(key: key) }
+        }
+        if !observing { continuation.finish() }
+        return stream
     }
 
     /// Returns the map as a dictionary.

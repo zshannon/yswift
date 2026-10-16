@@ -1,17 +1,19 @@
 import Foundation
-import XCTest
+import Testing
 @testable import YSwift
 
-class YSubdocTests: XCTestCase {
+@Suite
+final class YSubdocTests {
 
     // MARK: - Basic Creation Tests
 
+    @Test
     func test_subdocBasicCreation() {
         let parentDoc = YDocument()
         let subdoc = YDocument(options: YDocumentOptions(guid: "test-subdoc"))
 
-        XCTAssertEqual(subdoc.guid, "test-subdoc")
-        XCTAssertNil(subdoc.parentDocument)
+        #expect((subdoc.guid) == ("test-subdoc"))
+        #expect(subdoc.parentDocument == nil)
 
         let array: YArray<String> = parentDoc.getOrCreateArray(named: "docs")
         parentDoc.transactSync { txn in
@@ -23,10 +25,11 @@ class YSubdocTests: XCTestCase {
             array.getSubdoc(at: 0, transaction: txn)
         }
 
-        XCTAssertNotNil(retrieved)
-        XCTAssertEqual(retrieved?.guid, "test-subdoc")
+        #expect(retrieved != nil)
+        #expect((retrieved?.guid) == ("test-subdoc"))
     }
 
+    @Test
     func test_subdocWithOptions() {
         let options = YDocumentOptions(
             autoLoad: true,
@@ -36,21 +39,22 @@ class YSubdocTests: XCTestCase {
         )
         let doc = YDocument(options: options)
 
-        XCTAssertEqual(doc.autoLoad, true)
-        XCTAssertEqual(doc.clientId, 12345)
-        XCTAssertEqual(doc.guid, "custom-guid")
-        XCTAssertEqual(doc.shouldLoad, true)
+        #expect((doc.autoLoad) == (true))
+        #expect((doc.clientId) == (12345))
+        #expect((doc.guid) == ("custom-guid"))
+        #expect((doc.shouldLoad) == (true))
     }
 
     // MARK: - Parent Relationship Tests
 
+    @Test
     func test_subdocParentRelationship() {
         let parentDoc = YDocument()
         let subdoc = YDocument(options: YDocumentOptions(guid: "child"))
         let array: YArray<String> = parentDoc.getOrCreateArray(named: "subdocs")
 
         // Before insertion, subdoc has no parent
-        XCTAssertNil(subdoc.parentDocument)
+        #expect(subdoc.parentDocument == nil)
 
         // Insert subdoc
         let inserted = parentDoc.transactSync { txn in
@@ -58,12 +62,13 @@ class YSubdocTests: XCTestCase {
         }
 
         // The inserted subdoc should have a parent
-        XCTAssertNotNil(inserted.parentDocument)
-        XCTAssertTrue(inserted.parentDocument!.isSame(as: parentDoc))
+        #expect(inserted.parentDocument != nil)
+        #expect(inserted.parentDocument!.isSame(as: parentDoc))
     }
 
     // MARK: - Array Insertion Tests
 
+    @Test
     func test_subdocArrayInsertion() {
         let parentDoc = YDocument()
         let array: YArray<String> = parentDoc.getOrCreateArray(named: "docs")
@@ -79,14 +84,15 @@ class YSubdocTests: XCTestCase {
         let retrieved1 = array.getSubdoc(at: 0)
         let retrieved2 = array.getSubdoc(at: 1)
 
-        XCTAssertNotNil(retrieved1)
-        XCTAssertNotNil(retrieved2)
-        XCTAssertEqual(retrieved1?.guid, "doc-1")
-        XCTAssertEqual(retrieved2?.guid, "doc-2")
+        #expect(retrieved1 != nil)
+        #expect(retrieved2 != nil)
+        #expect((retrieved1?.guid) == ("doc-1"))
+        #expect((retrieved2?.guid) == ("doc-2"))
     }
 
     // MARK: - Map Insertion Tests
 
+    @Test
     func test_subdocMapInsertion() {
         let parentDoc = YDocument()
         let map: YMap<String> = parentDoc.getOrCreateMap(named: "docs")
@@ -99,12 +105,13 @@ class YSubdocTests: XCTestCase {
 
         let retrieved = map.getSubdoc(forKey: "myDoc")
 
-        XCTAssertNotNil(retrieved)
-        XCTAssertEqual(retrieved?.guid, "mapped-doc")
+        #expect(retrieved != nil)
+        #expect((retrieved?.guid) == ("mapped-doc"))
     }
 
     // MARK: - Subdocs Iterator Tests
 
+    @Test
     func test_subdocsIterator() {
         let parentDoc = YDocument()
         let array: YArray<String> = parentDoc.getOrCreateArray(named: "docs")
@@ -119,35 +126,37 @@ class YSubdocTests: XCTestCase {
 
         // Get subdoc GUIDs
         let guids = parentDoc.subdocGuids()
-        XCTAssertEqual(guids.count, 2)
-        XCTAssertTrue(guids.contains("iter-doc-1"))
-        XCTAssertTrue(guids.contains("iter-doc-2"))
+        #expect((guids.count) == (2))
+        #expect(guids.contains("iter-doc-1"))
+        #expect(guids.contains("iter-doc-2"))
 
         // Get subdocs
         let subdocs = parentDoc.subdocs()
-        XCTAssertEqual(subdocs.count, 2)
+        #expect((subdocs.count) == (2))
     }
 
     // MARK: - GUID Preservation Tests
 
+    @Test
     func test_subdocGuid() {
         let customGuid = "my-unique-guid-12345"
         let doc = YDocument(options: YDocumentOptions(guid: customGuid))
 
-        XCTAssertEqual(doc.guid, customGuid)
+        #expect((doc.guid) == (customGuid))
     }
 
     // MARK: - Reference Equality Tests
 
+    @Test
     func test_subdocPtrEq() {
         let doc1 = YDocument()
         let doc2 = YDocument()
 
         // Different documents should not be equal
-        XCTAssertFalse(doc1.isSame(as: doc2))
+        #expect(!(doc1.isSame(as: doc2)))
 
         // Same document should be equal to itself
-        XCTAssertTrue(doc1.isSame(as: doc1))
+        #expect(doc1.isSame(as: doc1))
 
         // Inserted and retrieved subdocs should be equal
         let parentDoc = YDocument()
@@ -160,33 +169,42 @@ class YSubdocTests: XCTestCase {
 
         let retrieved = array.getSubdoc(at: 0)!
 
-        XCTAssertTrue(inserted.isSame(as: retrieved))
+        #expect(inserted.isSame(as: retrieved))
     }
 
     // MARK: - Observation Tests
 
-    func test_subdocObservation() {
-        let parentDoc = YDocument()
-        let array: YArray<String> = parentDoc.getOrCreateArray(named: "docs")
+    @Test
+    func test_subdocObservation() async {
+        let exercise: (Confirmation) -> sending Void = { eventReceived in
+            let parentDoc = YDocument()
+            let array: YArray<String> = parentDoc.getOrCreateArray(named: "docs")
 
-        var addedCount = 0
-        let subscription = parentDoc.observeSubdocs { event in
-            addedCount += event.added.count
+            var addedCount = 0
+            parentDoc.transactSync { transaction in
+                parentDoc.observeSubdocs(key: "test", transaction: transaction) { event in
+                    eventReceived()
+                    addedCount += event.added.count
+                }
+            }
+
+            let subdoc = YDocument(options: YDocumentOptions(guid: "observed-doc"))
+            parentDoc.transactSync { txn in
+                array.insertSubdoc(at: 0, subdoc, transaction: txn)
+            }
+
+            #expect(addedCount == 1)
+
+            parentDoc.transactSync { transaction in
+                parentDoc.unobserveSubdocs(key: "test", transaction: transaction)
+            }
         }
-
-        let subdoc = YDocument(options: YDocumentOptions(guid: "observed-doc"))
-        parentDoc.transactSync { txn in
-            array.insertSubdoc(at: 0, subdoc, transaction: txn)
-        }
-
-        // Give a brief moment for the event to propagate
-        XCTAssertGreaterThanOrEqual(addedCount, 1)
-
-        subscription.cancel()
+        await confirmation("Receives each change", expectedCount: 1, exercise)
     }
 
     // MARK: - Subdoc Data Tests
 
+    @Test
     func test_subdocWithData() {
         let parentDoc = YDocument()
         let array: YArray<String> = parentDoc.getOrCreateArray(named: "docs")
@@ -209,22 +227,31 @@ class YSubdocTests: XCTestCase {
             retrievedText.getString(in: txn)
         }
 
-        XCTAssertEqual(content, "Hello from subdoc!")
+        #expect((content) == ("Hello from subdoc!"))
     }
 
     // MARK: - Memory Leak Tests
 
+    @Test
     func test_subdocMemoryLeaks() {
-        let parentDoc = YDocument()
-        let subdoc = YDocument(options: YDocumentOptions(guid: "leak-test"))
-        let array: YArray<String> = parentDoc.getOrCreateArray(named: "docs")
+        weak var weakParentDoc: YDocument?
+        weak var weakSubdoc: YDocument?
+        weak var weakArray: YArray<String>?
+        do {
+            let parentDoc = YDocument()
+            let subdoc = YDocument(options: YDocumentOptions(guid: "leak-test"))
+            let array: YArray<String> = parentDoc.getOrCreateArray(named: "docs")
 
-        parentDoc.transactSync { txn in
-            array.insertSubdoc(at: 0, subdoc, transaction: txn)
+            parentDoc.transactSync { txn in
+                array.insertSubdoc(at: 0, subdoc, transaction: txn)
+            }
+
+            weakParentDoc = parentDoc
+            weakSubdoc = subdoc
+            weakArray = array
         }
-
-        trackForMemoryLeaks(parentDoc)
-        trackForMemoryLeaks(subdoc)
-        trackForMemoryLeaks(array)
+        #expect(weakParentDoc == nil)
+        #expect(weakSubdoc == nil)
+        #expect(weakArray == nil)
     }
 }

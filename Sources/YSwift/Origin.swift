@@ -1,4 +1,4 @@
-import Yniffi
+@preconcurrency import Yniffi
 
 /// A type that contains a reference to Yrs shared collection type.
 public protocol YCollection {

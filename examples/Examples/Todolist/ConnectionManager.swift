@@ -1,14 +1,15 @@
 import Foundation
 import MultipeerConnectivity
+import UIKit
 import YSwift
 
-class ConnectionManager: NSObject, ObservableObject {
+class ConnectionManager: NSObject {
     private static let service = "yswift-todolist"
 
-    @Published var peers: [MCPeerID] = []
+    private var peers: [MCPeerID] = []
 
     private var session: MCSession
-    private let myPeerId = MCPeerID(displayName: UIDevice.current.name)
+    private let myPeerId: MCPeerID
     private var nearbyServiceBrowser: MCNearbyServiceBrowser
     private var nearbyServiceAdvertiser: MCNearbyServiceAdvertiser
     private let `protocol`: YProtocol
@@ -16,7 +17,9 @@ class ConnectionManager: NSObject, ObservableObject {
     var onConnectionStateChanged: ((MCSessionState) -> Void)?
     var onUpdatesReceived: (() -> Void)?
 
+    @MainActor
     init(document: YDocument) {
+        myPeerId = MCPeerID(displayName: UIDevice.current.name)
         self.protocol = YProtocol(document: document)
         session = MCSession(peer: myPeerId, securityIdentity: nil, encryptionPreference: .none)
         nearbyServiceAdvertiser = MCNearbyServiceAdvertiser(

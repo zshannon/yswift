@@ -55,8 +55,10 @@ interface YrsDoc {
   boolean ptr_eq([ByRef] YrsDoc other);
 
   // Observation
-  YSubscription observe_destroy(YrsDestroyObservationDelegate delegate);
-  YSubscription observe_subdocs(YrsSubdocsObservationDelegate delegate);
+  void observe_destroy([ByRef] YrsTransaction tx, string key, YrsDestroyObservationDelegate delegate);
+  boolean unobserve_destroy([ByRef] YrsTransaction tx, string key);
+  void observe_subdocs([ByRef] YrsTransaction tx, string key, YrsSubdocsObservationDelegate delegate);
+  boolean unobserve_subdocs([ByRef] YrsTransaction tx, string key);
 
   // Existing methods
   [Throws=CodingError]
@@ -100,9 +102,6 @@ typedef sequence<u8> YrsOrigin;
 [Custom]
 typedef u64 YrsCollectionPtr;
 
-interface YSubscription {
-};
-
 interface YrsMap {
   YrsCollectionPtr raw_ptr();
   u32 length([ByRef] YrsTransaction tx);
@@ -119,7 +118,8 @@ interface YrsMap {
   void values([ByRef] YrsTransaction tx, YrsMapIteratorDelegate delegate);
   void each([ByRef] YrsTransaction tx, YrsMapKVIteratorDelegate delegate);
 
-  YSubscription observe(YrsMapObservationDelegate delegate);
+  boolean observe([ByRef] YrsTransaction tx, string key, YrsMapObservationDelegate delegate);
+  boolean unobserve([ByRef] YrsTransaction tx, string key);
 
   // Subdoc methods
   YrsDoc? get_doc([ByRef] YrsTransaction tx, string key);
@@ -177,7 +177,8 @@ interface YrsArray {
   void remove([ByRef] YrsTransaction tx, u32 index);
   void remove_range([ByRef] YrsTransaction tx, u32 index, u32 len);
   sequence<string> to_a([ByRef] YrsTransaction tx);
-  YSubscription observe(YrsArrayObservationDelegate delegate);
+  boolean observe([ByRef] YrsTransaction tx, string key, YrsArrayObservationDelegate delegate);
+  boolean unobserve([ByRef] YrsTransaction tx, string key);
 
   // Subdoc methods
   YrsDoc? get_doc([ByRef] YrsTransaction tx, u32 index);
@@ -194,8 +195,6 @@ interface YrsArray {
   YrsArray push_array([ByRef] YrsTransaction tx);
   YrsMap push_map([ByRef] YrsTransaction tx);
   YrsText push_text([ByRef] YrsTransaction tx);
-  void move_to([ByRef] YrsTransaction tx, u32 source, u32 target);
-  void move_range_to([ByRef] YrsTransaction tx, u32 start, u32 end, u32 target);
 };
 
 callback interface YrsArrayEachDelegate {
@@ -224,7 +223,8 @@ interface YrsText {
   string get_string([ByRef] YrsTransaction tx);
   void remove_range([ByRef] YrsTransaction tx, u32 start, u32 length);
   u32 length([ByRef] YrsTransaction tx);
-  YSubscription observe(YrsTextObservationDelegate delegate);
+  boolean observe([ByRef] YrsTransaction tx, string key, YrsTextObservationDelegate delegate);
+  boolean unobserve([ByRef] YrsTransaction tx, string key);
   void apply_delta([ByRef] YrsTransaction tx, sequence<YrsDelta> delta);
   sequence<YrsDiff> diff([ByRef] YrsTransaction tx);
 };
@@ -283,11 +283,23 @@ interface YrsUndoManager {
     [Throws=YrsUndoError]
     void clear();
 
-    YSubscription observe_added(YrsUndoManagerObservationDelegate delegate);
+    [Throws=YrsUndoError]
+    void observe_added(string key, YrsUndoManagerObservationDelegate delegate);
 
-    YSubscription observe_updated(YrsUndoManagerObservationDelegate delegate);
+    [Throws=YrsUndoError]
+    boolean unobserve_added(string key);
 
-    YSubscription observe_popped(YrsUndoManagerObservationDelegate delegate);
+    [Throws=YrsUndoError]
+    void observe_updated(string key, YrsUndoManagerObservationDelegate delegate);
+
+    [Throws=YrsUndoError]
+    boolean unobserve_updated(string key);
+
+    [Throws=YrsUndoError]
+    void observe_popped(string key, YrsUndoManagerObservationDelegate delegate);
+
+    [Throws=YrsUndoError]
+    boolean unobserve_popped(string key);
 };
 
 [Error]

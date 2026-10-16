@@ -53,7 +53,6 @@ For a more detailed example of synchronizing a document, see <doc:SynchronizingD
 
 - ``YSwift/YDocument/transactSync(origin:_:)``
 - ``YSwift/YDocument/transact(origin:_:)``
-- ``YSwift/YDocument/transactAsync(_:_:completion:)``
 
 ### Comparing Documents for Synchronization
 

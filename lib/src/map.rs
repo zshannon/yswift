@@ -2,7 +2,6 @@ use crate::array::YrsArray;
 use crate::doc::{YrsCollectionPtr, YrsDoc};
 use crate::error::CodingError;
 use crate::mapchange::{try_from_entry_change, YrsMapChange};
-use crate::subscription::YSubscription;
 use crate::text::YrsText;
 use crate::transaction::YrsTransaction;
 use parking_lot::ReentrantMutex;
@@ -10,9 +9,10 @@ use std::cell::UnsafeCell;
 use std::fmt::Debug;
 use std::sync::Arc;
 use yrs::branch::Branch;
+use yrs::{Hook, SharedRef};
 use yrs::{Any, Map, MapRef, Observable, Out};
 
-pub(crate) struct YrsMap(ReentrantMutex<UnsafeCell<MapRef>>);
+pub(crate) struct YrsMap(ReentrantMutex<UnsafeCell<MapRef>>, Hook<MapRef>);
 
 // Marks that this type can be transferred across thread boundaries.
 // Safe because ReentrantMutex provides proper thread synchronization.
@@ -58,7 +58,8 @@ impl AsRef<Branch> for YrsMap {
 // converting from a MapRef type into a YrsMap type.
 impl From<MapRef> for YrsMap {
     fn from(value: MapRef) -> Self {
-        YrsMap(ReentrantMutex::new(UnsafeCell::new(value)))
+        let hook = value.hook();
+        YrsMap(ReentrantMutex::new(UnsafeCell::new(value)), hook)
     }
 }
 
@@ -303,21 +304,23 @@ impl YrsMap {
         });
     }
 
-    pub(crate) fn observe(&self, delegate: Box<dyn YrsMapObservationDelegate>) -> Arc<YSubscription> {
-        let mut map = self.inner();
-        let subscription = map
-            .as_mut()
-            .observe(move |transaction, map_event| {
-                let delta = map_event.keys(transaction);
-                // Filter out nested shared types (YMap, YArray, YText, YDoc) which return None
-                let result: Vec<YrsMapChange> = delta
-                    .iter()
-                    .filter_map(|val| try_from_entry_change(val.0, val.1))
-                    .collect();
-                delegate.call(result)
-            });
+    pub(crate) fn observe(&self, transaction: &YrsTransaction, key: String, delegate: Box<dyn YrsMapObservationDelegate>) -> bool {
+        let tx = transaction.transaction();
+        let tx = tx.as_ref().unwrap();
+        let Some(source) = self.1.get(tx) else { return false; };
+        source.observe(key.as_str(), move |transaction, event| {
+            let delta = event.keys(transaction);
+            // Nested shared types are observed through their own collections.
+            let result = delta.iter().filter_map(|(key, value)| try_from_entry_change(key, value)).collect();
+            delegate.call(result);
+        });
+        true
+    }
 
-            Arc::new(YSubscription::new(subscription))
+    pub(crate) fn unobserve(&self, transaction: &YrsTransaction, key: String) -> bool {
+        let tx = transaction.transaction();
+        let tx = tx.as_ref().unwrap();
+        self.1.get(tx).is_some_and(|source| source.unobserve(key.as_str()))
     }
 
     // MARK: - Subdoc methods

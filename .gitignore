@@ -1,7 +1,6 @@
 *.DS_Store
 .swiftpm
 Sources/Yniffi/
-Package.resolved
 generated/
 
 *.xcodeproj
@@ -14,7 +13,6 @@ build/
 *_symbols.txt
 .vscode
 
-Cargo.lock
 
 # Xcode
 #
@@ -65,6 +63,7 @@ playground.xcworkspace
 # .swiftpm
 
 .build/
+*.profraw
 
 # CocoaPods
 #

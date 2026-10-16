@@ -1,7 +1,8 @@
 # Upstream maintenance
 
 The **Upstream updates** GitHub Actions workflow runs every Monday at 17:23 UTC
-and can be run manually from Actions. It checks both `y-crdt/yswift:main` and
+and can be run manually from Actions. Changes to the automation on `main` also
+run it, so its PR creation path is exercised when maintained. It checks both `y-crdt/yswift:main` and
 `y-crdt/y-crdt:main`, including unreleased Yrs commits.
 
 - YSwift changes open one cross-fork merge PR and assign the fork owner.

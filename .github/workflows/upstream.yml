@@ -1,0 +1,169 @@
+name: Upstream updates
+
+on:
+  schedule:
+    - cron: '23 17 * * 1' # Mondays, 17:23 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: upstream-updates
+  cancel-in-progress: false
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - uses: liskin/gh-workflow-keepalive@581532d619d4390ec4ec5c34376cee42462fd1d6 # v1
+
+  yswift:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    outputs:
+      pull-request: ${{ steps.check.outputs.pull-request }}
+    steps:
+      - name: Open or update upstream YSwift pull request
+        id: check
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            const repo = context.repo;
+            const base = context.payload.repository.default_branch;
+            const head = 'y-crdt:main';
+            const { data: comparison } = await github.rest.repos.compareCommitsWithBasehead({
+              ...repo, basehead: `${base}...${head}`
+            });
+            if (!comparison.ahead_by) {
+              core.info('Upstream YSwift is already merged.');
+              return;
+            }
+            const { data: existing } = await github.rest.pulls.list({ ...repo, base, head, state: 'open' });
+            const body = `Merge upstream YSwift main (${comparison.ahead_by} new commits).\n\n` +
+              `[Changes](${comparison.html_url}).\n\n` +
+              `Native and Swift validation: ${context.serverUrl}/${repo.owner}/${repo.repo}/actions/runs/${context.runId}. ` +
+              'Conflicts and API changes require review; this workflow never merges automatically.';
+            const { data: pr } = existing.length
+              ? await github.rest.pulls.update({ ...repo, pull_number: existing[0].number, body })
+              : await github.rest.pulls.create({ ...repo, base, head, title: 'Merge upstream YSwift changes', body });
+            await github.rest.issues.addAssignees({ ...repo, issue_number: pr.number, assignees: [repo.owner] });
+            core.setOutput('pull-request', pr.number);
+            await core.summary.addLink(`YSwift PR #${pr.number}`, pr.html_url).write();
+
+  validate-yswift:
+    needs: yswift
+    if: needs.yswift.outputs.pull-request != ''
+    uses: ./.github/workflows/build.yml
+    with:
+      ref: refs/pull/${{ needs.yswift.outputs.pull-request }}/merge
+
+  prepare-yrs:
+    runs-on: macos-15
+    timeout-minutes: 45
+    outputs:
+      changed: ${{ steps.check.outputs.changed }}
+      validation: ${{ steps.validate.outcome }}
+    env:
+      YSWIFT_LOCAL: 'true'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Check upstream revision
+        id: check
+        run: |
+          git clone --depth 1 https://github.com/y-crdt/y-crdt.git "$RUNNER_TEMP/y-crdt"
+          python3 - <<'PY'
+          import json, os, pathlib, subprocess
+          previous = json.loads(pathlib.Path('.github/upstream-yrs.json').read_text())
+          revision = subprocess.check_output(['git', '-C', os.environ['RUNNER_TEMP'] + '/y-crdt', 'rev-parse', 'HEAD'], text=True).strip()
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'changed={str(revision != previous["revision"]).lower()}\n')
+          if revision != previous['revision']:
+              pathlib.Path('.github/upstream-yrs-pending.json').write_text(json.dumps({'revision': revision}, indent=2) + '\n')
+              pathlib.Path(os.environ['RUNNER_TEMP'], 'yswift-upstream-pr.md').write_text(f'Update Yrs to [{revision[:12]}](https://github.com/y-crdt/y-crdt/commit/{revision}).\n\nImport or validation failures require manual resolution.\n')
+          PY
+      - name: Import Yrs and rebase the undo fix
+        id: update
+        if: steps.check.outputs.changed == 'true'
+        continue-on-error: true
+        run: |
+          python3 scripts/test-update-yrs.py
+          python3 scripts/update-yrs.py --source "$RUNNER_TEMP/y-crdt"
+          rm .github/upstream-yrs-pending.json
+      - name: Validate native and Swift changes
+        id: validate
+        if: steps.check.outputs.changed == 'true' && steps.update.outcome == 'success' && steps.update.outputs.conflicts == 'false'
+        continue-on-error: true
+        run: |
+          xcodebuild -version
+          ./scripts/build-xcframework.sh
+          cargo test --manifest-path lib/Cargo.toml --locked
+          swift build
+          swift test --enable-code-coverage -v
+      - name: Record validation result
+        if: always() && steps.check.outputs.changed == 'true'
+        env:
+          IMPORT_RESULT: ${{ steps.update.outcome }}
+          VALIDATION_RESULT: ${{ steps.validate.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          printf '\nImport: **%s**. Native and Swift validation: **%s**.\n\n[Workflow logs](%s).\n' "$IMPORT_RESULT" "$VALIDATION_RESULT" "$RUN_URL" >> "$RUNNER_TEMP/yswift-upstream-pr.md"
+      - name: Export update for publishing on a fresh runner
+        if: always() && steps.check.outputs.changed == 'true'
+        run: |
+          mkdir -p "$RUNNER_TEMP/yrs-update"
+          git add -- .github/upstream-yrs*.json Package.swift Package.resolved lib/Cargo.toml lib/Cargo.lock lib/vendor lib/swift/scaffold
+          git diff --cached --binary > "$RUNNER_TEMP/yrs-update/update.patch"
+          cp "$RUNNER_TEMP/yswift-upstream-pr.md" "$RUNNER_TEMP/yrs-update/body.md"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always() && steps.check.outputs.changed == 'true'
+        with:
+          name: yrs-update
+          path: ${{ runner.temp }}/yrs-update
+          retention-days: 7
+          if-no-files-found: error
+
+  publish-yrs:
+    needs: prepare-yrs
+    if: always() && needs.prepare-yrs.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: yrs-update
+          path: ${{ runner.temp }}/yrs-update
+      # Never execute imported code in this job. Only these paths may be changed.
+      - name: Apply the prepared update
+        run: |
+          git apply --index --include='.github/upstream-yrs*.json' --include='Package.swift' --include='Package.resolved' --include='lib/Cargo.toml' --include='lib/Cargo.lock' --include='lib/vendor/*' --include='lib/swift/scaffold/*' "$RUNNER_TEMP/yrs-update/update.patch"
+      - name: Open or update Yrs pull request
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8
+        with:
+          branch: codex/yrs-upstream
+          title: Update vendored Yrs from upstream
+          commit-message: Update vendored Yrs from upstream
+          body-path: ${{ runner.temp }}/yrs-update/body.md
+          assignees: ${{ github.repository_owner }}
+          draft: ${{ needs.prepare-yrs.outputs.validation != 'success' && 'always-true' || 'false' }}
+      - name: Report failed update validation
+        if: needs.prepare-yrs.outputs.validation != 'success'
+        run: |
+          echo '::error::The Yrs update needs attention. See the draft pull request and preceding logs.'
+          exit 1

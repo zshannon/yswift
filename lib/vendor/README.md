@@ -1,15 +1,16 @@
-# Yrs 0.28 destruction fix
+# Vendored Yrs and the destruction fix
 
-`yrs/` is the crates.io release of Yrs 0.28.0 with the focused patch in
+`yrs/` contains the upstream Yrs crate plus the focused local diff in
 `yrs-undo-drop.patch`. Cargo selects it through `[patch.crates-io]` in `lib/Cargo.toml`.
-The upstream MIT license is copied from the same commit into `yrs/LICENSE`
-(the crate archive omits the repository-root license file).
+The exact source revision, crate version, archive SHA-256, and unresolved conflicts
+are recorded in [upstream-yrs.json](../../.github/upstream-yrs.json).
+The upstream MIT license is copied into `yrs/LICENSE`; Cargo registry metadata is omitted.
 
-Source: https://crates.io/crates/yrs/0.28.0
-Upstream commit: `23b7f5693bbf9e7d26340c521ee8647f79bdfba2` (repository path `yrs`).
-Original crate SHA-256: `52c70dc8beca8666c77612a96889106ca3cd65318609721f464624ff79685da9`.
-Only `src/observer.rs` and `src/undo.rs` differ from that release. Cargo registry
-metadata files are omitted. No public Yrs API or wire format is changed.
+The initial baseline was crates.io Yrs 0.28.0, commit
+`23b7f5693bbf9e7d26340c521ee8647f79bdfba2`, with only `src/observer.rs` and
+`src/undo.rs` patched. Weekly updates package upstream main and rebase this diff
+using Git's three-way merge. Conflicts are preserved in a draft PR, never silently
+discarded. See [upstream maintenance](../../docs/upstream-maintenance.md).
 
 Upstream UndoManager::drop acquires document transactions to unregister its observers.
 That panics when another transaction is active. Ignoring the failure is unsafe because

@@ -2,53 +2,52 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        required: true
+
+permissions:
+  contents: read
 
 jobs:
   build:
-
-    runs-on: macos-14
+    runs-on: macos-15
+    timeout-minutes: 45
     env:
-      YSWIFT_LOCAL: true
-
+      YSWIFT_LOCAL: 'true'
     steps:
-    - name: Checkout Project
-      uses: actions/checkout@v3
-
-    - name: Show Build Version
-      run: xcodebuild -version
-
-    - name: Build XCFramework
-      run: ./scripts/build-xcframework.sh
-
-    - name: Build YSwift
-      run: swift build
-
-    - name: Test YSwift
-      run: swift test --enable-code-coverage -v
-
-    # - name: Install Mise and Tuist
-    #   uses: jdx/mise-action@v2
-    #   with:
-    #     install: true
-    #     cache: true
-    #     tool_versions: |
-    #       tuist = "3.39.3"
-
-    # - name: Tuist Fetch
-    #   run: |
-    #     cd examples
-    #     tuist fetch
-
-    # - name: Tuist Generate
-    #   run: |
-    #     cd examples
-    #     tuist generate -x -n
-
-    # - name: Tuist Test
-    #   run: |
-    #     cd examples
-    #     tuist build
-
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          persist-credentials: false
+          fetch-depth: 2
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Test upstream merge handling
+        run: python3 scripts/test-update-yrs.py
+      - name: Check vendor patch consistency
+        run: python3 scripts/update-yrs.py --check
+      - name: Require matching native binary configuration
+        run: |
+          if ! git diff --quiet HEAD^ HEAD -- lib/src lib/vendor/yrs lib/Cargo.toml lib/Cargo.lock lib/swift/scaffold; then
+            if ! grep -q '^let binaryURL: String? = nil$' Package.swift; then
+              echo '::error::Native changes must clear binaryURL and binaryChecksum until a matching release is published.'
+              exit 1
+            fi
+          fi
+      - name: Show Build Version
+        run: xcodebuild -version
+      - name: Build XCFramework
+        run: ./scripts/build-xcframework.sh
+      - name: Test native wrapper
+        run: cargo test --manifest-path lib/Cargo.toml --locked
+      - name: Build YSwift
+        run: swift build
+      - name: Test YSwift
+        run: swift test --enable-code-coverage -v

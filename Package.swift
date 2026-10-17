@@ -5,8 +5,8 @@ import Foundation
 
 // Unreleased source checkouts use the locally built framework. The release script
 // sets these two values only when preparing a matching published binary.
-let binaryURL: String? = "https://github.com/zshannon/yswift/releases/download/0.7.0/yniffiFFI.xcframework.zip"
-let binaryChecksum = "1efcab2a9ede196c3332291d0b51847b6e1fd922ae758a21df21ceafc5b15eaa"
+let binaryURL: String? = nil
+let binaryChecksum = ""
 let FFIbinaryTarget: PackageDescription.Target
 if let binaryURL, ProcessInfo.processInfo.environment["YSWIFT_LOCAL"] == nil {
     FFIbinaryTarget = .binaryTarget(name: "yniffiFFI", url: binaryURL, checksum: binaryChecksum)

@@ -33,6 +33,44 @@ final class YMapTests {
     }
 
     @Test
+    func missingAndRemovedKeysReturnNil() {
+        let root: YMap<Int> = document.getOrCreateMap(named: "missing-keys")
+        let nested: YMap<Int> = root.insertMap(forKey: "nested")
+        for map in [root, nested] {
+            #expect(map["missing"] == nil)
+            map.updateValue(1, forKey: "removed")
+            map.removeValue(forKey: "removed")
+            #expect(map.get(key: "removed") == nil)
+            document.transactSync { transaction in
+                #expect(map.get(key: "missing", transaction: transaction) == nil)
+            }
+        }
+    }
+
+    @Test
+    func asynchronousMissingKeyReturnsNil() async {
+        let map: YMap<Int> = document.getOrCreateMap(named: "async-missing")
+        let missing = await map.get(key: "missing")
+        #expect(missing == nil)
+    }
+
+    @Test
+    func replicatedRemovalReturnsNil() throws {
+        let map: YMap<Int> = document.getOrCreateMap(named: "replicated-removal")
+        map.updateValue(1, forKey: "removed")
+        let initial = document.transactSync { $0.transactionEncodeStateAsUpdate() }
+        let remote = YDocument()
+        let remoteMap: YMap<Int> = remote.getOrCreateMap(named: "replicated-removal")
+        try remote.transactSync { try $0.transactionApplyUpdate(update: initial) }
+        let removal = remote.transactSync { transaction in
+            remoteMap.removeValue(forKey: "removed", transaction: transaction)
+            return transaction.transactionEncodeUpdate()
+        }
+        try document.transactSync { try $0.transactionApplyUpdate(update: removal) }
+        #expect(map.get(key: "removed") == nil)
+    }
+
+    @Test
     func test_remove() {
         let initialInstance = TestType(name: "Aidar", age: 24)
         let secondInstance = TestType(name: "Joe", age: 55)
@@ -746,7 +784,7 @@ final class YMapTests {
         let map: YMap<Int> = doc.getOrCreateMap(named: "counter")
 
         // Fire multiple async transactions sequentially to test serialization
-        // (Concurrent increment has a Rust bug with map.get on missing keys)
+        // Each increment remains one non-suspending actor-isolated transaction.
         for i in 0..<10 {
             await doc.transact { txn in
                 map.updateValue(i, forKey: "key\(i)", transaction: txn)

@@ -136,17 +136,18 @@ impl YrsMap {
         &self,
         transaction: &YrsTransaction,
         key: String,
-    ) -> Result<String, CodingError> {
+    ) -> Result<Option<String>, CodingError> {
         let binding = transaction.transaction();
         let tx = binding.as_ref().unwrap();
         let map = self.inner();
-        let v = map.as_ref().get(tx, key.as_str()).unwrap();
-        let mut buf = String::new();
-        if let Out::Any(any) = v {
-            any.to_json(&mut buf);
-            Ok(buf)
-        } else {
-            Err(CodingError::EncodingError)
+        match map.as_ref().get(tx, key.as_str()) {
+            None => Ok(None),
+            Some(Out::Any(any)) => {
+                let mut buf = String::new();
+                any.to_json(&mut buf);
+                Ok(Some(buf))
+            }
+            Some(_) => Err(CodingError::EncodingError),
         }
     }
 
@@ -530,7 +531,25 @@ mod tests {
         assert_eq!(map.length(&txn), 1);
 
         let result = map.get(&txn, key_to_insert.clone()).unwrap();
-        assert_eq!(result, value_to_insert);
+        assert_eq!(result, Some(value_to_insert));
+    }
+
+    #[test]
+    fn missing_and_removed_keys_return_none() {
+        let doc = YrsDoc::new();
+        let root = doc.get_map("root".into());
+        let txn = doc.transact(None);
+        let nested = root.insert_map(&txn, "nested".into());
+        for map in [&root, &nested] {
+            assert!(map.get(&txn, "missing".into()).unwrap().is_none());
+            map.insert(&txn, "value".into(), "1".into());
+            map.remove(&txn, "value".into()).unwrap();
+            assert!(map.get(&txn, "value".into()).unwrap().is_none());
+            map.insert(&txn, "null".into(), "null".into());
+            assert_eq!(map.get(&txn, "null".into()).unwrap(), Some("null".into()));
+            map.insert_array(&txn, "array".into());
+            assert!(map.get(&txn, "array".into()).is_err());
+        }
     }
 
     #[test]

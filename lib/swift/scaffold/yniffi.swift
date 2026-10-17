@@ -1509,7 +1509,7 @@ public protocol YrsMapProtocol: AnyObject {
 
     func entries(tx: YrsTransaction) -> [YrsMapEntry]
 
-    func get(tx: YrsTransaction, key: String) throws -> String
+    func get(tx: YrsTransaction, key: String) throws -> String?
 
     func getArray(tx: YrsTransaction, key: String) -> YrsArray?
 
@@ -1613,8 +1613,8 @@ open class YrsMap:
         })
     }
 
-    open func get(tx: YrsTransaction, key: String) throws -> String {
-        return try FfiConverterString.lift(rustCallWithError(FfiConverterTypeCodingError.lift) {
+    open func get(tx: YrsTransaction, key: String) throws -> String? {
+        return try FfiConverterOptionString.lift(rustCallWithError(FfiConverterTypeCodingError.lift) {
             uniffi_uniffi_yniffi_fn_method_yrsmap_get(self.uniffiClonePointer(),
                                                       FfiConverterTypeYrsTransaction.lower(tx),
                                                       FfiConverterString.lower(key), $0)
@@ -5091,7 +5091,7 @@ private let initializationResult: InitializationResult = {
     if uniffi_uniffi_yniffi_checksum_method_yrsmap_entries() != 47354 {
         return InitializationResult.apiChecksumMismatch
     }
-    if uniffi_uniffi_yniffi_checksum_method_yrsmap_get() != 30941 {
+    if uniffi_uniffi_yniffi_checksum_method_yrsmap_get() != 23600 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_uniffi_yniffi_checksum_method_yrsmap_get_array() != 56677 {

@@ -42,6 +42,10 @@ cargo run --locked --manifest-path "./Cargo.toml"  \
     --language swift \
     --out-dir "${SWIFT_FOLDER}/scaffold"
 
+# UniFFI lifts an owned event and does not reuse it after callback dispatch.
+# Express that ownership transfer so native document handles can enter the Swift actor.
+python3 "${THIS_SCRIPT_DIR}/prepare-swift-bindings.py"
+
 sed -i '' 's/[[:blank:]]*$//' "${SWIFT_FOLDER}/scaffold/yniffiFFI.h"
 
 echo "▸ Building for x86_64-apple-ios"

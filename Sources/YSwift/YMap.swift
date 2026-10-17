@@ -1,15 +1,15 @@
 import Foundation
-import Queue
-@preconcurrency import Yniffi
+import Yniffi
 
 /// A type that provides a map shared data type.
 ///
 /// Store, order, and retrieve any single `Codable` type within a `YMap` keyed with a `String`.
 ///
 /// Create a new `YMap` instance using ``YSwift/YDocument/getOrCreateMap(named:)`` from a ``YDocument``.
-public final class YMap<T: Codable>: Transactable, YCollection, @unchecked Sendable {
+@YSwiftActor
+public final class YMap<T: Codable & Sendable>: Transactable, YCollection {
     private let _map: YrsMap
-    let document: YDocument
+    public let document: YDocument
 
     init(map: YrsMap, document: YDocument) {
         _map = map
@@ -33,8 +33,8 @@ public final class YMap<T: Codable>: Transactable, YCollection, @unchecked Senda
     /// Gets the value within a map identified by the string you provide.
     /// - Parameter key: The string that identifies the object.
     /// - Returns: The object within the map at that key, or `nil` if it's not available.
-    public func get(key: String) async -> T? where T: Sendable {
-        await withTransaction { txn -> T? in
+    public func get(key: String) async -> T? {
+        withTransaction { txn -> T? in
             if let result = try? self._map.get(tx: txn, key: key) {
                 return Coder.decoded(result)
             } else {
@@ -47,8 +47,8 @@ public final class YMap<T: Codable>: Transactable, YCollection, @unchecked Senda
     /// - Parameters:
     ///   - value: The object to set, or nil to remove.
     ///   - key: The string that identifies the object.
-    public func set(_ value: T?, forKey key: String) async where T: Sendable {
-        await withTransaction { txn in
+    public func set(_ value: T?, forKey key: String) async {
+        withTransaction { txn in
             if let value = value {
                 self._map.insert(tx: txn, key: key, value: Coder.encoded(value))
             } else {
@@ -58,16 +58,16 @@ public final class YMap<T: Codable>: Transactable, YCollection, @unchecked Senda
     }
 
     /// Returns the length of the map.
-    public func length() async -> UInt32 where T: Sendable {
-        await withTransaction { txn in
+    public func length() async -> UInt32 {
+        withTransaction { txn in
             self._map.length(tx: txn)
         }
     }
 
     /// Returns a Boolean value indicating whether the key you provide is in the map.
     /// - Parameter key: A string that identifies an object within the map.
-    public func containsKey(_ key: String) async -> Bool where T: Sendable {
-        await withTransaction { txn in
+    public func containsKey(_ key: String) async -> Bool {
+        withTransaction { txn in
             self._map.containsKey(tx: txn, key: key)
         }
     }
@@ -76,8 +76,8 @@ public final class YMap<T: Codable>: Transactable, YCollection, @unchecked Senda
     /// - Parameter key: A string that identifies the object to remove.
     /// - Returns: The item removed, or `nil` if unavailable.
     @discardableResult
-    public func removeValue(forKey key: String) async -> T? where T: Sendable {
-        await withTransaction { txn -> T? in
+    public func removeValue(forKey key: String) async -> T? {
+        withTransaction { txn -> T? in
             if let result = try? self._map.remove(tx: txn, key: key) {
                 return Coder.decoded(result)
             } else {
@@ -87,40 +87,27 @@ public final class YMap<T: Codable>: Transactable, YCollection, @unchecked Senda
     }
 
     /// Removes all items from the map.
-    public func removeAll() async where T: Sendable {
-        await withTransaction { txn in
+    public func removeAll() async {
+        withTransaction { txn in
             self._map.clear(tx: txn)
         }
     }
 
     /// Returns all keys from the map.
-    public func keys() async -> [String] where T: Sendable {
-        await withTransaction { txn in
-            var result: [String] = []
-            let delegate = YMapKeyIteratorDelegate { result.append($0) }
-            self._map.keys(tx: txn, delegate: delegate)
-            return result
-        }
+    public func keys() async -> [String] {
+        withTransaction { self._map.keys(tx: $0) }
     }
 
     /// Returns all values from the map.
-    public func values() async -> [T] where T: Sendable {
-        await withTransaction { txn in
-            var result: [T] = []
-            let delegate = YMapValueIteratorDelegate(callback: { result.append($0) }, decoded: Coder.decoded)
-            self._map.values(tx: txn, delegate: delegate)
-            return result
+    public func values() async -> [T] {
+        withTransaction { transaction in
+            self._map.entries(tx: transaction).map { Coder.decoded($0.value) }
         }
     }
 
     /// Returns the map as a dictionary asynchronously.
-    public func toMapAsync() async -> [String: T] where T: Sendable {
-        await withTransaction { txn in
-            var result: [String: T] = [:]
-            let delegate = YMapKeyValueIteratorDelegate(callback: { result[$0] = $1 }, decoded: Coder.decoded)
-            self._map.each(tx: txn, delegate: delegate)
-            return result
-        }
+    public func toMapAsync() async -> [String: T] {
+        withTransaction { self.toMap(transaction: $0) }
     }
 
     // MARK: - Sync API with Explicit Transaction (Always Available)
@@ -164,36 +151,27 @@ public final class YMap<T: Codable>: Transactable, YCollection, @unchecked Senda
 
     /// Iterates keys using an existing transaction.
     public func keys(transaction: YrsTransaction, _ body: @escaping (String) -> Void) {
-        let delegate = YMapKeyIteratorDelegate(callback: body)
-        _map.keys(tx: transaction, delegate: delegate)
+        _map.keys(tx: transaction).forEach(body)
     }
 
     /// Iterates values using an existing transaction.
     public func values(transaction: YrsTransaction, _ body: @escaping (T) -> Void) {
-        let delegate = YMapValueIteratorDelegate(callback: body, decoded: Coder.decoded)
-        _map.values(tx: transaction, delegate: delegate)
+        for entry in _map.entries(tx: transaction) { body(Coder.decoded(entry.value)) }
     }
 
     /// Iterates key-value pairs using an existing transaction.
     public func each(transaction: YrsTransaction, _ body: @escaping (String, T) -> Void) {
-        let delegate = YMapKeyValueIteratorDelegate(callback: body, decoded: Coder.decoded)
-        _map.each(tx: transaction, delegate: delegate)
+        for entry in _map.entries(tx: transaction) { body(entry.key, Coder.decoded(entry.value)) }
     }
 
     /// Returns the map as a dictionary using an existing transaction.
     public func toMap(transaction: YrsTransaction) -> [String: T] {
-        var result: [String: T] = [:]
-        each(transaction: transaction) { key, value in
-            result[key] = value
-        }
-        return result
+        Dictionary(uniqueKeysWithValues: _map.entries(tx: transaction).map { ($0.key, Coder.decoded($0.value)) })
     }
 
-    // MARK: - Deprecated Sync API (Creates Own Transaction)
+    // MARK: - Actor-isolated API (Creates Own Transaction)
 
     /// Gets or sets the value within a map identified by the string you provide.
-    /// - Warning: Deprecated. Use async `get(key:)` and `set(_:forKey:)` instead.
-    @available(*, deprecated, message: "Use async get(key:) and set(_:forKey:) instead")
     public subscript(key: String) -> T? {
         get {
             get(key: key, transaction: nil)
@@ -208,8 +186,6 @@ public final class YMap<T: Codable>: Transactable, YCollection, @unchecked Senda
     }
 
     /// Updates or inserts the object for the key you provide.
-    /// - Warning: Deprecated. Use async `set(_:forKey:)` or pass explicit transaction.
-    @available(*, deprecated, message: "Use async set(_:forKey:) or pass explicit transaction")
     public func updateValue(_ value: T, forKey key: String, transaction: YrsTransaction? = nil) {
         withTransaction(transaction) { txn in
             self._map.insert(tx: txn, key: key, value: Coder.encoded(value))
@@ -217,8 +193,6 @@ public final class YMap<T: Codable>: Transactable, YCollection, @unchecked Senda
     }
 
     /// Returns the length of the map.
-    /// - Warning: Deprecated. Use async `length()` or pass explicit transaction.
-    @available(*, deprecated, message: "Use async length() or pass explicit transaction")
     public func length(transaction: YrsTransaction? = nil) -> UInt32 {
         withTransaction(transaction) { txn in
             self._map.length(tx: txn)
@@ -226,8 +200,6 @@ public final class YMap<T: Codable>: Transactable, YCollection, @unchecked Senda
     }
 
     /// Returns the object from the map identified by the key you provide.
-    /// - Warning: Deprecated. Use async `get(key:)` or pass explicit transaction.
-    @available(*, deprecated, message: "Use async get(key:) or pass explicit transaction")
     public func get(key: String, transaction: YrsTransaction? = nil) -> T? {
         withTransaction(transaction) { txn -> T? in
             if let result = try? self._map.get(tx: txn, key: key) {
@@ -239,8 +211,6 @@ public final class YMap<T: Codable>: Transactable, YCollection, @unchecked Senda
     }
 
     /// Returns a Boolean value indicating whether the key you provide is in the map.
-    /// - Warning: Deprecated. Use async `containsKey(_:)` or pass explicit transaction.
-    @available(*, deprecated, message: "Use async containsKey(_:) or pass explicit transaction")
     public func containsKey(_ key: String, transaction: YrsTransaction? = nil) -> Bool {
         withTransaction(transaction) { txn in
             self._map.containsKey(tx: txn, key: key)
@@ -248,8 +218,6 @@ public final class YMap<T: Codable>: Transactable, YCollection, @unchecked Senda
     }
 
     /// Removes an object from the map.
-    /// - Warning: Deprecated. Use async `removeValue(forKey:)` or pass explicit transaction.
-    @available(*, deprecated, message: "Use async removeValue(forKey:) or pass explicit transaction")
     @discardableResult
     public func removeValue(forKey key: String, transaction: YrsTransaction? = nil) -> T? {
         withTransaction(transaction) { txn -> T? in
@@ -262,8 +230,6 @@ public final class YMap<T: Codable>: Transactable, YCollection, @unchecked Senda
     }
 
     /// Removes all items from the map.
-    /// - Warning: Deprecated. Use async `removeAll()` or pass explicit transaction.
-    @available(*, deprecated, message: "Use async removeAll() or pass explicit transaction")
     public func removeAll(transaction: YrsTransaction? = nil) {
         withTransaction(transaction) { txn in
             self._map.clear(tx: txn)
@@ -271,33 +237,18 @@ public final class YMap<T: Codable>: Transactable, YCollection, @unchecked Senda
     }
 
     /// Calls the closure you provide with each key from the map.
-    /// - Warning: Deprecated. Use async `keys()` or pass explicit transaction.
-    @available(*, deprecated, message: "Use async keys() or pass explicit transaction")
     public func keys(transaction: YrsTransaction? = nil, _ body: @escaping (String) -> Void) {
-        let delegate = YMapKeyIteratorDelegate(callback: body)
-        withTransaction(transaction) { txn in
-            self._map.keys(tx: txn, delegate: delegate)
-        }
+        withTransaction(transaction) { self.keys(transaction: $0, body) }
     }
 
     /// Calls the closure you provide with each value from the map.
-    /// - Warning: Deprecated. Use async `values()` or pass explicit transaction.
-    @available(*, deprecated, message: "Use async values() or pass explicit transaction")
     public func values(transaction: YrsTransaction? = nil, _ body: @escaping (T) -> Void) {
-        let delegate = YMapValueIteratorDelegate(callback: body, decoded: Coder.decoded)
-        withTransaction(transaction) { txn in
-            self._map.values(tx: txn, delegate: delegate)
-        }
+        withTransaction(transaction) { self.values(transaction: $0, body) }
     }
 
     /// Iterates over the map of elements, providing each element to the closure you provide.
-    /// - Warning: Deprecated. Use async iteration or pass explicit transaction.
-    @available(*, deprecated, message: "Use async toMap() or pass explicit transaction")
     public func each(transaction: YrsTransaction? = nil, _ body: @escaping (String, T) -> Void) {
-        let delegate = YMapKeyValueIteratorDelegate(callback: body, decoded: Coder.decoded)
-        withTransaction(transaction) { txn in
-            self._map.each(tx: txn, delegate: delegate)
-        }
+        withTransaction(transaction) { self.each(transaction: $0, body) }
     }
 
 
@@ -307,7 +258,7 @@ public final class YMap<T: Codable>: Transactable, YCollection, @unchecked Senda
     /// The key replaces any existing observer with the same key. Use this collection's document transaction.
     /// - Returns: False if the collection has been deleted.
     @discardableResult
-    public func observe(key: String, transaction: YrsTransaction, _ body: @escaping ([YMapChange<T>]) -> Void) -> Bool {
+    public func observe(key: String, transaction: YrsTransaction, _ body: @escaping @Sendable ([YMapChange<T>]) -> Void) -> Bool {
         let delegate = YMapObservationDelegate(decoded: Coder.decoded, callback: body)
         return _map.observe(tx: transaction, key: key, delegate: delegate)
     }
@@ -319,10 +270,10 @@ public final class YMap<T: Codable>: Transactable, YCollection, @unchecked Senda
         _map.unobserve(tx: transaction, key: key)
     }
 
-    /// Removes an observer on the document's async transaction queue.
+    /// Removes an observer on the YSwift actor.
     @discardableResult
-    public func unobserveAsync(key: String) async -> Bool where T: Sendable {
-        await document.transact { transaction in
+    public func unobserveAsync(key: String) async -> Bool {
+        document.transact { transaction in
             self.unobserve(key: key, transaction: transaction)
         }
     }
@@ -339,11 +290,10 @@ public final class YMap<T: Codable>: Transactable, YCollection, @unchecked Senda
     /// }
     /// ```
     ///
-    /// - TODO: Support queue priority argument as optional parameter (e.g. `.high`, `.userInitiated`)
-    public func observeAsync() async -> AsyncStream<[YMapChange<T>]> where T: Sendable {
+    public func observeAsync() async -> AsyncStream<[YMapChange<T>]> {
         let key = UUID().uuidString
         let (stream, continuation) = AsyncStream<[YMapChange<T>]>.makeStream(bufferingPolicy: .unbounded)
-        let observing = await document.transact { transaction in
+        let observing = document.transact { transaction in
             self.observe(key: key, transaction: transaction) { continuation.yield($0) }
         }
         continuation.onTermination = { _ in
@@ -354,18 +304,8 @@ public final class YMap<T: Codable>: Transactable, YCollection, @unchecked Senda
     }
 
     /// Returns the map as a dictionary.
-    /// - Warning: Deprecated. Use async `toMapAsync()` or pass explicit transaction.
-    @available(*, deprecated, message: "Use async toMapAsync() or pass explicit transaction")
     public func toMap(transaction: YrsTransaction? = nil) -> [String: T] {
-        if let transaction = transaction {
-            return toMap(transaction: transaction)
-        }
-        var replicatedMap: [String: T] = [:]
-        withTransaction(transaction) { txn in
-            let delegate = YMapKeyValueIteratorDelegate(callback: { replicatedMap[$0] = $1 }, decoded: Coder.decoded)
-            self._map.each(tx: txn, delegate: delegate)
-        }
-        return replicatedMap
+        withTransaction(transaction) { self.toMap(transaction: $0) }
     }
     
     public func pointer() -> YrsCollectionPtr {
@@ -373,98 +313,13 @@ public final class YMap<T: Codable>: Transactable, YCollection, @unchecked Senda
     }
 }
 
-extension YMap: Sequence {
-    public typealias Iterator = YMapIterator
-
-    // this method can't support the Iterator protocol because I've added
-    // YrsTransation to the function, needed for any interactions with the
-    // map - but the protocol defines it as taking no additional
-    // options. So... where do we get a relevant transaction? Do we stash
-    // one within the map, or create it afresh on each iterator creation?
-    public func makeIterator() -> Iterator {
-        YMapIterator(self)
-    }
-
-    public class YMapIterator: IteratorProtocol {
-        var keyValues: [(String, T)]
-
-        init(_ map: YMap) {
-            var collectedKeyValues: [(String, T)] = []
-            map.each { key, value in
-                collectedKeyValues.append((key, value))
-            }
-            keyValues = collectedKeyValues
-        }
-
-        public func next() -> (String, T)? {
-            keyValues.popLast()
-        }
-    }
-}
-
-/// A type that holds a closure that the Rust language bindings calls
-/// while iterating the keys of a Map.
-class YMapKeyIteratorDelegate: YrsMapIteratorDelegate {
-    private var callback: (String) -> Void
-
-    init(callback: @escaping (String) -> Void) {
-        self.callback = callback
-    }
-
-    func call(value: String) {
-        callback(value)
-    }
-}
-
-/// A type that holds a closure that the Rust language bindings calls
-/// while iterating the values of a Map.
-///
-/// The values returned by Rust is a String with a JSON encoded object that this
-/// delegate needs to unwrap/decode on the fly...
-class YMapValueIteratorDelegate<T: Codable>: YrsMapIteratorDelegate {
-    private var callback: (T) -> Void
-    private var decoded: (String) -> T
-
-    init(callback: @escaping (T) -> Void,
-         decoded: @escaping (String) -> T)
-    {
-        self.callback = callback
-        self.decoded = decoded
-    }
-
-    func call(value: String) {
-        callback(decoded(value))
-    }
-}
-
-/// A type that holds a closure that the Rust language bindings calls
-/// while iterating the keys and values of a Map.
-///
-/// The key is a string, and the value is a String with a JSON encoded object that this
-/// delegate needs to unwrap/decode on the fly.
-class YMapKeyValueIteratorDelegate<T: Codable>: YrsMapKvIteratorDelegate {
-    private var callback: (String, T) -> Void
-    private var decoded: (String) -> T
-
-    init(callback: @escaping (String, T) -> Void,
-         decoded: @escaping (String) -> T)
-    {
-        self.callback = callback
-        self.decoded = decoded
-    }
-
-    func call(key: String, value: String) {
-        callback(key, decoded(value))
-    }
-}
-
-class YMapObservationDelegate<T: Codable>: YrsMapObservationDelegate {
-    private var callback: ([YMapChange<T>]) -> Void
-    private var decoded: (String) -> T
+final class YMapObservationDelegate<T: Codable & Sendable>: YrsMapObservationDelegate {
+    private let callback: @Sendable ([YMapChange<T>]) -> Void
+    private let decoded: @Sendable (String) -> T
 
     init(
-        decoded: @escaping (String) -> T,
-        callback: @escaping ([YMapChange<T>]) -> Void
+        decoded: @escaping @Sendable (String) -> T,
+        callback: @escaping @Sendable ([YMapChange<T>]) -> Void
     ) {
         self.decoded = decoded
         self.callback = callback
@@ -551,7 +406,7 @@ extension YMap {
     ///   - key: The key that identifies the nested array.
     ///   - transaction: An optional transaction to use.
     /// - Returns: The nested array, or nil if no array exists for that key.
-    public func getArray<U: Codable>(forKey key: String, transaction: YrsTransaction? = nil) -> YArray<U>? {
+    public func getArray<U: Codable & Sendable>(forKey key: String, transaction: YrsTransaction? = nil) -> YArray<U>? {
         withTransaction(transaction) { txn in
             self._map.getArray(tx: txn, key: key).map { YArray(array: $0, document: self.document) }
         }
@@ -562,7 +417,7 @@ extension YMap {
     ///   - key: The key that identifies the nested map.
     ///   - transaction: An optional transaction to use.
     /// - Returns: The nested map, or nil if no map exists for that key.
-    public func getMap<U: Codable>(forKey key: String, transaction: YrsTransaction? = nil) -> YMap<U>? {
+    public func getMap<U: Codable & Sendable>(forKey key: String, transaction: YrsTransaction? = nil) -> YMap<U>? {
         withTransaction(transaction) { txn in
             self._map.getMap(tx: txn, key: key).map { YMap<U>(map: $0, document: self.document) }
         }
@@ -596,7 +451,7 @@ extension YMap {
     ///   - transaction: An optional transaction to use.
     /// - Returns: The newly inserted nested map.
     @discardableResult
-    public func insertMap<U: Codable>(forKey key: String, transaction: YrsTransaction? = nil) -> YMap<U> {
+    public func insertMap<U: Codable & Sendable>(forKey key: String, transaction: YrsTransaction? = nil) -> YMap<U> {
         withTransaction(transaction) { txn in
             YMap<U>(map: self._map.insertMap(tx: txn, key: key), document: self.document)
         }
@@ -608,7 +463,7 @@ extension YMap {
     ///   - transaction: An optional transaction to use.
     /// - Returns: The newly inserted nested array.
     @discardableResult
-    public func insertArray<U: Codable>(forKey key: String, transaction: YrsTransaction? = nil) -> YArray<U> {
+    public func insertArray<U: Codable & Sendable>(forKey key: String, transaction: YrsTransaction? = nil) -> YArray<U> {
         withTransaction(transaction) { txn in
             YArray<U>(array: self._map.insertArray(tx: txn, key: key), document: self.document)
         }
@@ -644,7 +499,7 @@ extension YMap {
     ///   - key: The key for the nested map.
     ///   - transaction: An optional transaction to use.
     /// - Returns: The existing or newly created nested map.
-    public func getOrInsertMap<U: Codable>(forKey key: String, transaction: YrsTransaction? = nil) -> YMap<U> {
+    public func getOrInsertMap<U: Codable & Sendable>(forKey key: String, transaction: YrsTransaction? = nil) -> YMap<U> {
         withTransaction(transaction) { txn in
             YMap<U>(map: self._map.getOrInsertMap(tx: txn, key: key), document: self.document)
         }
@@ -655,7 +510,7 @@ extension YMap {
     ///   - key: The key for the nested array.
     ///   - transaction: An optional transaction to use.
     /// - Returns: The existing or newly created nested array.
-    public func getOrInsertArray<U: Codable>(forKey key: String, transaction: YrsTransaction? = nil) -> YArray<U> {
+    public func getOrInsertArray<U: Codable & Sendable>(forKey key: String, transaction: YrsTransaction? = nil) -> YArray<U> {
         withTransaction(transaction) { txn in
             YArray<U>(array: self._map.getOrInsertArray(tx: txn, key: key), document: self.document)
         }

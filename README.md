@@ -14,7 +14,7 @@ The repository includes two swift packages:
 
 ## Building from source
 
-This fork uses **Yrs 0.28.0** with a [focused destruction fix](lib/vendor/README.md),
+This fork uses **Yrs 0.28.0** with [targeted lifetime, history, and decoding fixes](lib/vendor/README.md),
 with Rust **1.99.0** pinned in
 `rust-toolchain.toml`. Install Xcode with Swift 6 and Rust through rustup, then run:
 
@@ -31,31 +31,47 @@ Released manifests contain a matching binary URL and checksum; `YSWIFT_LOCAL=1`
 overrides them for source development. Commit `Cargo.lock` and `Package.resolved`
 when dependencies resolve.
 
-The public library and tests compile in Swift 6 language mode. Generated UniFFI 0.27
-bindings remain in Swift 5 mode because their generated global callback tables do
-not yet satisfy Swift 6 checking.
+The library, generated UniFFI bridge, and tests all compile in Swift 6 language mode.
+Minimum deployment targets are iOS 18 and macOS 15. The bridge preparation step
+uses the standard-library `Mutex` for callback handles and explicit `sending`
+ownership for native subdocument events; it adds no unchecked Sendable conformances.
 
-## Migrating to Yrs 0.28
+## Migrating to 0.7
 
-- Array `move` and `moveRange` were removed upstream and are removed here.
-- Combine publishers and `YSubscription` are removed. Observation uses standard
-  `AsyncStream`; no custom stream or subscription implementation is included.
-- Await stream registration before making the first change. Cancelling the consuming
-  task terminates its stream and schedules native observer removal on the document's
-  transaction queue.
-- Synchronous callbacks use caller-owned keys and an explicit document transaction.
-  Registering a key again replaces its previous callback. Unregister after callback
-  delivery, in another transaction.
-- Client IDs must fit in 53 bits, as required by Yrs 0.28. Values above 32 bits are
-  preserved. Tests cover legacy 0.25 update decoding and current replication.
-- Undo callbacks also use keys. Registration and removal throw during an active
-  transaction or undo callback. Undo managers can safely be released during those
-  operations: the native patch cancels callbacks without acquiring a document
-  transaction and preserves state until an already-running callback returns.
+- `YDocument`, collections, synchronization, and undo operations share
+  `YSwiftActor`. A transaction executes synchronously on that actor and cannot
+  suspend. Outside the actor, await document access; inside a transaction, use
+  the supplied transaction for every collection operation.
+- Array/map values require `Codable & Sendable`. Rich-text attributes use
+  `SwifterJSON.JSON`, and events are owned `Sendable` values. Live CRDT collections
+  no longer conform to synchronous standard-library collection protocols; iterate
+  `toArrayAsync()` / `toMapAsync()` snapshots instead.
+- Combine publishers, `YSubscription`, array `move`, and `moveRange` are removed.
+  Observation uses standard `AsyncStream`. Await registration before the first
+  mutation. Consumer cancellation schedules native observer removal on the actor.
+- Keyed callbacks are `@Sendable` and receive owned event data. They cannot
+  synchronously reenter actor-isolated mutation. Use a `Task` and `await` for
+  subsequent document work. Registering the same key replaces its observer.
+- `YUndoManager` spans collections from multiple documents, supports selective
+  undo/redo clearing, exposes state snapshots and stack-cleared events, and retains
+  document identity on undo events. Metadata is owned `Data?`, replacing retained
+  object pointers; encode custom metadata explicitly when needed.
+- Undo grouping accepts an injected timestamp closure. Use `wrap()` for an explicit
+  capture boundary. Managers can safely be released during transactions or callbacks.
+- `YIdSet` and `YIdMap<Value>` expose released Yrs range algebra and V1/V2 encoding.
+  They own Swift values, retain no native handles, and can cross tasks safely.
+  Operations that decode or validate data throw.
+- Transactions expose insertion/deletion sets and owned change snapshots.
+  `observeBeforeObserverCalls` runs synchronously in the native commit phase;
+  its async stream provides snapshots for later consumption.
+- `cleanupFormatting` defaults to true and can be disabled in document options.
+  Root documents support `destroyAsync()`; subdocuments use their parent transaction.
+- Client IDs must fit in 53 bits. Tests cover legacy Yrs 0.25 updates and current
+  replication using released Yrs 0.28.0.
 
 ```swift
 let document = YDocument()
-let counts: YMap<Int> = document.getOrCreateMap(named: "counts")
+let counts: YMap<Int> = await document.getOrCreateMap(named: "counts")
 let changes = await counts.observeAsync()
 let consumer = Task {
     for await change in changes {
@@ -63,17 +79,13 @@ let consumer = Task {
     }
 }
 await counts.set(1, forKey: "visits")
-// When observation is no longer needed:
 consumer.cancel()
 await consumer.value
 ```
 
-Use the async transaction APIs consistently for a document. The deprecated synchronous
-convenience APIs use a separate queue and must not be mixed with async transactions.
-
-Tests use Swift Testing, including `confirmation` for event receipt. Consumers finish
-inside the confirmation scope; tests do not sleep, poll deadlines, or depend on elapsed
-time. Undo grouping uses explicit `wrap()` boundaries.
+Swift Testing event tests use `confirmation` and await receipt inside its scope.
+Tests do not sleep, poll deadlines, or depend on elapsed time; capture-group tests
+advance an injected timestamp directly.
 
 ## Releasing
 

@@ -1,12 +1,14 @@
 import Foundation
-@preconcurrency import Yniffi
+@_exported import SwifterJSON
+import Yniffi
 
 /// A type that provides a text-oriented shared data type.
 ///
 /// Create a new `YText` instance using ``YSwift/YDocument/getOrCreateText(named:)`` from a ``YDocument``.
-public final class YText: Transactable, YCollection, @unchecked Sendable {
+@YSwiftActor
+public final class YText: Transactable, YCollection {
     private let _text: YrsText
-    let document: YDocument
+    public let document: YDocument
 
     init(text: YrsText, document: YDocument) {
         _text = text
@@ -18,7 +20,7 @@ public final class YText: Transactable, YCollection, @unchecked Sendable {
     /// Appends a string asynchronously.
     /// - Parameter text: The string to append.
     public func append(_ text: String) async {
-        await document.transact { txn in
+        document.transact { txn in
             self._text.append(tx: txn, text: text)
         }
     }
@@ -28,7 +30,7 @@ public final class YText: Transactable, YCollection, @unchecked Sendable {
     ///   - text: The string to insert.
     ///   - index: The position, within the UTF-8 buffer view, to insert the string.
     public func insert(_ text: String, at index: UInt32) async {
-        await document.transact { txn in
+        document.transact { txn in
             self._text.insert(tx: txn, index: index, chunk: text)
         }
     }
@@ -38,9 +40,9 @@ public final class YText: Transactable, YCollection, @unchecked Sendable {
     ///   - text: The string to insert.
     ///   - attributes: The attributes to associate with the string.
     ///   - index: The position to insert at.
-    public func insertWithAttributes(_ text: String, attributes: [String: Any], at index: UInt32) async {
+    public func insertWithAttributes(_ text: String, attributes: [String: JSON], at index: UInt32) async {
         let encodedAttributes = Coder.encoded(attributes)
-        await document.transact { txn in
+        document.transact { txn in
             self._text.insertWithAttributes(tx: txn, index: index, chunk: text, attrs: encodedAttributes)
         }
     }
@@ -50,7 +52,7 @@ public final class YText: Transactable, YCollection, @unchecked Sendable {
     ///   - embed: The codable type to embed.
     ///   - index: The position to embed at.
     public func insertEmbed<T: Encodable & Sendable>(_ embed: T, at index: UInt32) async {
-        await document.transact { txn in
+        document.transact { txn in
             self._text.insertEmbed(tx: txn, index: index, content: Coder.encoded(embed))
         }
     }
@@ -60,9 +62,9 @@ public final class YText: Transactable, YCollection, @unchecked Sendable {
     ///   - embed: The codable type to embed.
     ///   - attributes: The attributes to associate with the embedded type.
     ///   - index: The position to embed at.
-    public func insertEmbedWithAttributes<T: Encodable & Sendable>(_ embed: T, attributes: [String: Any], at index: UInt32) async {
+    public func insertEmbedWithAttributes<T: Encodable & Sendable>(_ embed: T, attributes: [String: JSON], at index: UInt32) async {
         let encodedAttributes = Coder.encoded(attributes)
-        await document.transact { txn in
+        document.transact { txn in
             self._text.insertEmbedWithAttributes(tx: txn, index: index, content: Coder.encoded(embed), attrs: encodedAttributes)
         }
     }
@@ -72,9 +74,9 @@ public final class YText: Transactable, YCollection, @unchecked Sendable {
     ///   - index: The index position to start formatting.
     ///   - length: The length of characters to update.
     ///   - attributes: The attributes to associate.
-    public func format(at index: UInt32, length: UInt32, attributes: [String: Any]) async {
+    public func format(at index: UInt32, length: UInt32, attributes: [String: JSON]) async {
         let encodedAttributes = Coder.encoded(attributes)
-        await document.transact { txn in
+        document.transact { txn in
             self._text.format(tx: txn, index: index, length: length, attrs: encodedAttributes)
         }
     }
@@ -84,21 +86,21 @@ public final class YText: Transactable, YCollection, @unchecked Sendable {
     ///   - start: The index position to start removing.
     ///   - length: The length of characters to remove.
     public func removeRange(start: UInt32, length: UInt32) async {
-        await document.transact { txn in
+        document.transact { txn in
             self._text.removeRange(tx: txn, start: start, length: length)
         }
     }
 
     /// Returns the string asynchronously.
     public func getStringAsync() async -> String {
-        await document.transact { txn in
+        document.transact { txn in
             self._text.getString(tx: txn)
         }
     }
 
     /// Returns the length asynchronously.
     public func lengthAsync() async -> UInt32 {
-        await document.transact { txn in
+        document.transact { txn in
             self._text.length(tx: txn)
         }
     }
@@ -107,7 +109,7 @@ public final class YText: Transactable, YCollection, @unchecked Sendable {
     public func observeAsync() async -> AsyncStream<[YTextChange]> {
         let key = UUID().uuidString
         let (stream, continuation) = AsyncStream<[YTextChange]>.makeStream(bufferingPolicy: .unbounded)
-        let observing = await document.transact { transaction in
+        let observing = document.transact { transaction in
             self.observe(key: key, transaction: transaction) { continuation.yield($0) }
         }
         continuation.onTermination = { _ in
@@ -130,17 +132,15 @@ public final class YText: Transactable, YCollection, @unchecked Sendable {
                 return YrsDelta.retained(index: index, attrs: Coder.encoded(attributes))
             }
         }
-        await document.transact { txn in
+        document.transact { txn in
             self._text.applyDelta(tx: txn, delta: yrsDelta)
         }
     }
 
     /// Returns the text content as diff chunks asynchronously.
     public func diffAsync() async -> [YTextDiff] {
-        let differences = await document.transact { txn in
-            self._text.diff(tx: txn)
-        }
-        return differences.map { yrsDiff in
+        document.transact { txn in
+            self._text.diff(tx: txn).map { yrsDiff in
             switch yrsDiff {
             case let .text(value, attrs):
                 return YTextDiff.text(value: value, attributes: Coder.decoded(attrs))
@@ -148,18 +148,17 @@ public final class YText: Transactable, YCollection, @unchecked Sendable {
                 return YTextDiff.embed(value: value, attributes: Coder.decoded(attrs))
             case let .other(attrs):
                 return YTextDiff.other(attributes: Coder.decoded(attrs))
+                }
             }
         }
     }
 
-    // MARK: - Sync APIs (Deprecated)
+    // MARK: - Actor-isolated transaction APIs
 
     /// Appends a string you provide to the shared text data type.
-    /// - Warning: Deprecated. Use async `append(_:)` or pass an explicit transaction.
     /// - Parameters:
     ///   - text: The string to append.
     ///   - transaction: An optional transaction to use when appending the string.
-    @available(*, deprecated, message: "Use async append(_:) or pass explicit transaction")
     public func append(_ text: String, in transaction: YrsTransaction? = nil) {
         if let transaction {
             self._text.append(tx: transaction, text: text)
@@ -171,12 +170,10 @@ public final class YText: Transactable, YCollection, @unchecked Sendable {
     }
 
     /// Inserts a string at an index position you provide.
-    /// - Warning: Deprecated. Use async `insert(_:at:)` or pass an explicit transaction.
     /// - Parameters:
     ///   - text: The string to insert.
     ///   - index: The position, within the UTF-8 buffer view, to insert the string.
     ///   - transaction: An optional transaction to use when appending the string.
-    @available(*, deprecated, message: "Use async insert(_:at:) or pass explicit transaction")
     public func insert(
         _ text: String,
         at index: UInt32,
@@ -192,16 +189,14 @@ public final class YText: Transactable, YCollection, @unchecked Sendable {
     }
 
     /// Inserts a string, with attributes, at an index position you provide.
-    /// - Warning: Deprecated. Use async `insertWithAttributes(_:attributes:at:)` or pass an explicit transaction.
     /// - Parameters:
     ///   - text: The string to insert.
     ///   - attributes: The attributes to associate with the appended string.
     ///   - index: The position, within the UTF-8 buffer view, to insert the string.
     ///   - transaction: An optional transaction to use when appending the string.
-    @available(*, deprecated, message: "Use async insertWithAttributes(_:attributes:at:) or pass explicit transaction")
     public func insertWithAttributes(
         _ text: String,
-        attributes: [String: Any],
+        attributes: [String: JSON],
         at index: UInt32,
         in transaction: YrsTransaction? = nil
     ) {
@@ -215,12 +210,10 @@ public final class YText: Transactable, YCollection, @unchecked Sendable {
     }
 
     /// Embeds a Codable type you provide within the text at the location you provide.
-    /// - Warning: Deprecated. Use async `insertEmbed(_:at:)` or pass an explicit transaction.
     /// - Parameters:
     ///   - embed: The codable type to embed.
     ///   - index: The position, within the UTF-8 buffer view, to embed the object.
     ///   - transaction: An optional transaction to use when appending the string.
-    @available(*, deprecated, message: "Use async insertEmbed(_:at:) or pass explicit transaction")
     public func insertEmbed<T: Encodable>(
         _ embed: T,
         at index: UInt32,
@@ -236,16 +229,14 @@ public final class YText: Transactable, YCollection, @unchecked Sendable {
     }
 
     /// Embeds a Codable type you provide within the text at the location you provide.
-    /// - Warning: Deprecated. Use async `insertEmbedWithAttributes(_:attributes:at:)` or pass an explicit transaction.
     /// - Parameters:
     ///   - embed: The codable type to embed.
     ///   - attributes: The attributes to associate with the embedded type.
     ///   - index: The position, within the UTF-8 buffer view, to embed the object.
     ///   - transaction: An optional transaction to use when appending the string.
-    @available(*, deprecated, message: "Use async insertEmbedWithAttributes(_:attributes:at:) or pass explicit transaction")
     public func insertEmbedWithAttributes<T: Encodable>(
         _ embed: T,
-        attributes: [String: Any],
+        attributes: [String: JSON],
         at index: UInt32,
         in transaction: YrsTransaction? = nil
     ) {
@@ -259,17 +250,15 @@ public final class YText: Transactable, YCollection, @unchecked Sendable {
     }
 
     /// Applies or updates attributes associated with a range of the string.
-    /// - Warning: Deprecated. Use async `format(at:length:attributes:)` or pass an explicit transaction.
     /// - Parameters:
     ///   - index: The index position, in the UTF-8 view of the string, to start formatting characters.
     ///   - length: The length of characters to update.
     ///   - attributes: The attributes to associate with the string.
     ///   - transaction: An optional transaction to use when appending the string.
-    @available(*, deprecated, message: "Use async format(at:length:attributes:) or pass explicit transaction")
     public func format(
         at index: UInt32,
         length: UInt32,
-        attributes: [String: Any],
+        attributes: [String: JSON],
         in transaction: YrsTransaction? = nil
     ) {
         if let transaction {
@@ -282,12 +271,10 @@ public final class YText: Transactable, YCollection, @unchecked Sendable {
     }
 
     /// Removes a range of text starting at a position you provide, removing the length that you provide.
-    /// - Warning: Deprecated. Use async `removeRange(start:length:)` or pass an explicit transaction.
     /// - Parameters:
     ///   - start: The index position, in the UTF-8 view of the string, to start removing characters.
     ///   - length: The length of characters to remove.
     ///   - transaction: An optional transaction to use when appending the string.
-    @available(*, deprecated, message: "Use async removeRange(start:length:) or pass explicit transaction")
     public func removeRange(
         start: UInt32,
         length: UInt32,
@@ -303,9 +290,7 @@ public final class YText: Transactable, YCollection, @unchecked Sendable {
     }
 
     /// Returns the string within the text.
-    /// - Warning: Deprecated. Use async `getStringAsync()` or pass an explicit transaction.
     /// - Parameter transaction: An optional transaction to use when appending the string.
-    @available(*, deprecated, message: "Use async getStringAsync() or pass explicit transaction")
     public func getString(in transaction: YrsTransaction? = nil) -> String {
         if let transaction {
             self._text.getString(tx: transaction)
@@ -317,9 +302,7 @@ public final class YText: Transactable, YCollection, @unchecked Sendable {
     }
 
     /// Returns the length of the string.
-    /// - Warning: Deprecated. Use async `lengthAsync()` or pass an explicit transaction.
     /// - Parameter transaction: An optional transaction to use when appending the string.
-    @available(*, deprecated, message: "Use async lengthAsync() or pass explicit transaction")
     public func length(in transaction: YrsTransaction? = nil) -> UInt32 {
         if let transaction {
             self._text.length(tx: transaction)
@@ -333,12 +316,11 @@ public final class YText: Transactable, YCollection, @unchecked Sendable {
 
 
     /// Registers a closure that is called with an array of changes to the text.
-    /// - Warning: Deprecated. Use `observeAsync()` instead.
     /// - Parameter callback: The closure to process reported changes from the text.
     /// The key replaces any existing observer with the same key. Use this collection's document transaction.
     /// - Returns: False if the collection has been deleted.
     @discardableResult
-    public func observe(key: String, transaction: YrsTransaction, _ body: @escaping (sending [YTextChange]) -> Void) -> Bool {
+    public func observe(key: String, transaction: YrsTransaction, _ body: @escaping @Sendable ([YTextChange]) -> Void) -> Bool {
         let delegate = YTextObservationDelegate(callback: body)
         return _text.observe(tx: transaction, key: key, delegate: delegate)
     }
@@ -350,10 +332,10 @@ public final class YText: Transactable, YCollection, @unchecked Sendable {
         _text.unobserve(tx: transaction, key: key)
     }
 
-    /// Removes an observer on the document's async transaction queue.
+    /// Removes an observer on the YSwift actor.
     @discardableResult
     public func unobserveAsync(key: String) async -> Bool {
-        await document.transact { transaction in
+        document.transact { transaction in
             self.unobserve(key: key, transaction: transaction)
         }
     }
@@ -362,14 +344,12 @@ public final class YText: Transactable, YCollection, @unchecked Sendable {
         return _text.rawPtr()
     }
 
-    // MARK: - Delta Operations (Deprecated)
+    // MARK: - Delta Operations (Actor-isolated)
 
     /// Applies a delta to the text.
-    /// - Warning: Deprecated. Use async `applyDelta(_:)` or pass an explicit transaction.
     /// - Parameters:
     ///   - delta: An array of text changes to apply.
     ///   - transaction: An optional transaction to use.
-    @available(*, deprecated, message: "Use async applyDelta(_:) or pass explicit transaction")
     public func applyDelta(_ delta: [YTextChange], in transaction: YrsTransaction? = nil) {
         let yrsDelta: [YrsDelta] = delta.map { change in
             switch change {
@@ -387,10 +367,8 @@ public final class YText: Transactable, YCollection, @unchecked Sendable {
     }
 
     /// Returns the text content as a list of diff chunks with formatting.
-    /// - Warning: Deprecated. Use async `diffAsync()` or pass an explicit transaction.
     /// - Parameter transaction: An optional transaction to use.
     /// - Returns: An array of text diff chunks.
-    @available(*, deprecated, message: "Use async diffAsync() or pass explicit transaction")
     public func diff(in transaction: YrsTransaction? = nil) -> [YTextDiff] {
         withTransaction(transaction) { txn in
             self._text.diff(tx: txn).map { yrsDiff in
@@ -407,7 +385,7 @@ public final class YText: Transactable, YCollection, @unchecked Sendable {
     }
 }
 
-extension YText: Equatable {
+extension YText {
     /// Returns a Boolean value that indicates whether the text values are identical.
     /// - Parameters:
     ///   - lhs: The first text type
@@ -419,22 +397,22 @@ extension YText: Equatable {
 }
 
 public extension String {
-    init(_ yText: YText) {
+    @YSwiftActor init(_ yText: YText) {
         self = yText.getString()
     }
 }
 
-extension YText: CustomStringConvertible {
+extension YText {
     /// Returns the current string within the text.
     public var description: String {
         getString()
     }
 }
 
-class YTextObservationDelegate: YrsTextObservationDelegate {
-    private var callback: (sending [YTextChange]) -> Void
+final class YTextObservationDelegate: YrsTextObservationDelegate {
+    private let callback: @Sendable ([YTextChange]) -> Void
 
-    init(callback: @escaping (sending [YTextChange]) -> Void) {
+    init(callback: @escaping @Sendable ([YTextChange]) -> Void) {
         self.callback = callback
     }
 
@@ -456,21 +434,21 @@ class YTextObservationDelegate: YrsTextObservationDelegate {
 }
 
 /// A change to the text or attributes associated with the text.
-public enum YTextChange {
+public enum YTextChange: Equatable, Sendable {
     /// Inserted string,and any associated attributes.
-    case inserted(value: String, attributes: [String: Any])
+    case inserted(value: String, attributes: [String: JSON])
     /// Deleted characters.
     case deleted(index: UInt32)
     /// Updated character position and any associated attributes.
-    case retained(index: UInt32, attributes: [String: Any])
+    case retained(index: UInt32, attributes: [String: JSON])
 }
 
 /// A diff chunk from the text with formatting information.
-public enum YTextDiff {
+public enum YTextDiff: Equatable, Sendable {
     /// A text chunk with optional attributes.
-    case text(value: String, attributes: [String: Any])
+    case text(value: String, attributes: [String: JSON])
     /// An embedded object with optional attributes.
-    case embed(value: String, attributes: [String: Any])
+    case embed(value: String, attributes: [String: JSON])
     /// Other content with optional attributes.
-    case other(attributes: [String: Any])
+    case other(attributes: [String: JSON])
 }

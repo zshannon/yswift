@@ -1,7 +1,9 @@
 import Foundation
 import Testing
+import Synchronization
 @testable import YSwift
 
+@YSwiftActor
 @Suite
 final class YSubdocTests {
 
@@ -175,31 +177,17 @@ final class YSubdocTests {
     // MARK: - Observation Tests
 
     @Test
-    func test_subdocObservation() async {
-        let exercise: (Confirmation) -> sending Void = { eventReceived in
-            let parentDoc = YDocument()
-            let array: YArray<String> = parentDoc.getOrCreateArray(named: "docs")
-
-            var addedCount = 0
-            parentDoc.transactSync { transaction in
-                parentDoc.observeSubdocs(key: "test", transaction: transaction) { event in
-                    eventReceived()
-                    addedCount += event.added.count
-                }
-            }
-
-            let subdoc = YDocument(options: YDocumentOptions(guid: "observed-doc"))
-            parentDoc.transactSync { txn in
-                array.insertSubdoc(at: 0, subdoc, transaction: txn)
-            }
-
-            #expect(addedCount == 1)
-
-            parentDoc.transactSync { transaction in
-                parentDoc.unobserveSubdocs(key: "test", transaction: transaction)
-            }
+    func test_observeSubdocs() async throws {
+        try await confirmation("Receives the added subdocument") { received in
+            let parent = YDocument()
+            let array: YArray<String> = parent.getOrCreateArray(named: "docs")
+            var events = await parent.observeSubdocsAsync().makeAsyncIterator()
+            let child = YDocument(options: YDocumentOptions(guid: "observed-doc"))
+            parent.transactSync { array.insertSubdoc(at: 0, child, transaction: $0) }
+            let event = try #require(await events.next())
+            received()
+            #expect(event.added.map(\.guid) == ["observed-doc"])
         }
-        await confirmation("Receives each change", expectedCount: 1, exercise)
     }
 
     // MARK: - Subdoc Data Tests

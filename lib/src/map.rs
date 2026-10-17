@@ -63,25 +63,10 @@ impl From<MapRef> for YrsMap {
     }
 }
 
-// A representation of a callback that is invoked from the various
-// map iterators, specifically to provide the JSON-string of the iterated
-// value from the map (for example, with `values` or `iter`).
-//
-// This allows the outside code (Swift, for example) to
-// handle the deserialization from JSON string into whatever the appropriate
-// type is within the swift language bindings. The `keys` iterator doesn't
-// need this "translation", while `values` does.
-//
-// The type is boxed and used as a dynamic type:
-// `Box<dyn YrsMapIteratorDelegate>`
-// rather than having the keys, values, or iter functions expose an iterator
-// back to the external language bindings.
-pub(crate) trait YrsMapIteratorDelegate: Send + Sync + Debug {
-    fn call(&self, value: String);
-}
-
-pub(crate) trait YrsMapKVIteratorDelegate: Send + Sync + Debug {
-    fn call(&self, key: String, value: String);
+#[derive(Debug, PartialEq)]
+pub(crate) struct YrsMapEntry {
+    pub key: String,
+    pub value: String,
 }
 
 pub(crate) trait YrsMapObservationDelegate: Send + Sync + Debug {
@@ -209,99 +194,24 @@ impl YrsMap {
         map.as_mut().clear(tx);
     }
 
-    pub(crate) fn keys(
-        &self,
-        transaction: &YrsTransaction,
-        delegate: Box<dyn YrsMapIteratorDelegate>,
-    ) {
-        // The internal `keys` function in Rust returns an explicit iterator that you can
-        // fiddle with.
-        //
-        // fn keys<'a, T: ReadTxn + 'a>(&'a self, txn: &'a T) -> Keys<'a, &'a T, T>
-        //
-        // For these language bindings we're instead holding onto the iterator
-        // ourselves, and expecting a delegate type from the language binding side that
-        // we call with each value as it is available.
-
-        // get a mutable transaction
+    pub(crate) fn keys(&self, transaction: &YrsTransaction) -> Vec<String> {
         let binding = transaction.transaction();
         let txn = binding.as_ref().unwrap();
-
         let map = self.inner();
-        map.as_ref().keys(txn).for_each(|key_value| {
-            delegate.call(key_value.to_string());
-        });
+        map.as_ref().keys(txn).map(str::to_owned).collect()
     }
 
-    pub(crate) fn values(
-        &self,
-        transaction: &YrsTransaction,
-        delegate: Box<dyn YrsMapIteratorDelegate>,
-    ) {
-        // Like the `keys` iterator pattern, we're holding onto the Rust iterator
-        // ourselves, and expecting a delegate type from the language binding side that
-        // we call with each value as it is available.
-
-        // get a mutable transaction
+    /// Returns owned JSON entries, excluding nested shared types and subdocuments.
+    pub(crate) fn entries(&self, transaction: &YrsTransaction) -> Vec<YrsMapEntry> {
         let binding = transaction.transaction();
         let txn = binding.as_ref().unwrap();
-
         let map = self.inner();
-        let iterator = map.as_ref().values(txn);
-        iterator.for_each(|value_list| {
-            // value is being returned as Vec<Value> from YrsMap - unclear
-            // why, but maybe we iterate over each element and attempt to any.to_json on it?
-            // 20mar2023 - checking w/ Bartosz on if I'm missing something about
-            // the values iterator here.
-            //
-            // The upstream yrs value iterator goes into the Yrs internal type
-            // `Item`, which can potentially contain a list of values within it.
-            // In practice, it appears to contains a single value for this usage of it.
-            value_list.iter().for_each(|val_in_list| {
-                // Only call delegate for JSON-serializable values (Out::Any).
-                // Skip nested shared types (YMap, YArray, YText, YDoc, etc.) -
-                // these should be accessed via dedicated get_map/get_array/get_text methods.
-                if let Out::Any(any) = val_in_list {
-                    let mut buf = String::new();
-                    any.to_json(&mut buf);
-                    delegate.call(buf);
-                }
-                // Silently skip non-Any values (nested shared types)
-            });
-        });
-    }
-
-    pub(crate) fn each(
-        &self,
-        transaction: &YrsTransaction,
-        delegate: Box<dyn YrsMapKVIteratorDelegate>,
-    ) {
-        // Like the `keys` and `values` iterator pattern, we're holding onto the Rust iterator
-        // ourselves, and expecting a delegate type from the language binding side that
-        // we call with each value as it is available.
-
-        // get a mutable transaction
-        let binding = transaction.transaction();
-        let txn = binding.as_ref().unwrap();
-
-        let map = self.inner();
-        let iterator = map.as_ref().iter(txn);
-        iterator.for_each(|key_value_pair| {
-            // key_value_pair is being returned as a tuple of (&str, Value)
-            // we'll pass the key value (String) straight through to the delegate,
-            // but do the extra work to convert Value to a JSON string for decoding
-            // on the far side of the language binding - or at least try to.
-            //
-            // Only call delegate for JSON-serializable values (Out::Any).
-            // Skip nested shared types (YMap, YArray, YText, YDoc, etc.) -
-            // these should be accessed via dedicated get_map/get_array/get_text methods.
-            if let Out::Any(any) = key_value_pair.1 {
-                let mut buf = String::new();
-                any.to_json(&mut buf);
-                delegate.call(key_value_pair.0.to_string(), buf);
-            }
-            // Silently skip non-Any values (nested shared types)
-        });
+        map.as_ref().iter(txn).filter_map(|(key, value)| {
+            let Out::Any(any) = value else { return None; };
+            let mut value = String::new();
+            any.to_json(&mut value);
+            Some(YrsMapEntry { key: key.to_owned(), value })
+        }).collect()
     }
 
     pub(crate) fn observe(&self, transaction: &YrsTransaction, key: String, delegate: Box<dyn YrsMapObservationDelegate>) -> bool {
@@ -544,6 +454,38 @@ impl YrsMap {
 #[cfg(test)]
 mod tests {
     use crate::YrsDoc;
+    use super::YrsMapEntry;
+
+    #[test]
+    fn iteration_snapshots_own_values_and_filter_nested_types() {
+        let (mut keys, mut entries) = {
+            let doc = YrsDoc::new();
+            let map = doc.get_map("map".into());
+            let txn = doc.transact(None);
+            map.insert(&txn, "text".into(), "\"hello\"".into());
+            map.insert(&txn, "number".into(), "42".into());
+            map.insert(&txn, "null".into(), "null".into());
+            map.insert_array(&txn, "array".into());
+            map.insert_map(&txn, "map".into());
+            map.insert_text(&txn, "rich-text".into());
+            map.insert_doc(&txn, "document".into(), &YrsDoc::new());
+            let keys = map.keys(&txn);
+            let entries = map.entries(&txn);
+            map.clear(&txn);
+            assert!(map.keys(&txn).is_empty());
+            assert!(map.entries(&txn).is_empty());
+            txn.free();
+            (keys, entries)
+        };
+        keys.sort();
+        entries.sort_by(|a, b| a.key.cmp(&b.key));
+        assert_eq!(keys, ["array", "document", "map", "null", "number", "rich-text", "text"]);
+        assert_eq!(entries, vec![
+            YrsMapEntry { key: "null".into(), value: "null".into() },
+            YrsMapEntry { key: "number".into(), value: "42".into() },
+            YrsMapEntry { key: "text".into(), value: "\"hello\"".into() },
+        ]);
+    }
 
     #[test]
     fn verify_new_map_has_zero_count() {
@@ -628,78 +570,5 @@ mod tests {
         assert_eq!(map.length(&txn), 0);
     }
 
-    /*
-        ## The section below is Joe trying to sort out the pieces to make a unit test
-        that "works" the code structure when you invoke "keys" - which involves multiple
-        calls to a delegate object that you need to provide. I haven't been able to figure
-        out how to structure the dyn Box<T> object and get it implementing the required
-        trait on the Rust side of things: `crate::map::YrsMapIteratorDelegate`
 
-        I'll work/test the pattern through the Swift language side of this binding setup,
-        but I'd really like to understand how to get it working on the Rust side as well.
-        For now, however, I'll just leave this at where I got to - and hope to come back to
-        resolve it in the future with some more experience Rust brains alongside.
-
-        #[derive(Debug)]
-        struct KeyDelegate {
-            collected: Vec<String>
-        }
-        // Marks that this type can be transferred across thread boundaries.
-        //unsafe impl Send for RefCell<KeyDelegate> {}
-        // Marks that this type is safe to share references between threads.
-        unsafe impl Sync for KeyDelegate {}
-
-        impl KeyDelegate {
-
-            fn append(&mut self, value: String) {
-                &self.collected.push(value);
-            }
-
-            fn new() -> KeyDelegate {
-                let newDelegate = KeyDelegate {
-                    collected: Vec::<String>::new()
-                };
-                return newDelegate
-            }
-
-            // fn test(&self) -> Box<dyn crate::map::YrsMapIteratorDelegate> {
-            //     return Box::new(self)
-            // }
-        }
-
-        impl crate::map::YrsMapIteratorDelegate for Box<KeyDelegate> {
-            fn call(&self, key_value: String) {
-                self.append(key_value)
-            }
-        }
-
-        // impl crate::map::YrsMapIteratorDelegate for KeyDelegate {
-        //     fn call(&self, key_value: String) {
-
-        //     }
-        // }
-
-        #[test]
-        fn map_keys() {
-            let doc = YrsDoc::new();
-            let map = doc.get_map("example_map".to_string());
-
-            let first_key_to_insert = "AB123".to_string();
-            let second_key_to_insert = "890YZ".to_string();
-            let value_to_insert = "\"Hello\"".to_string();
-
-            let txn = doc.transact();
-
-            map.insert(&txn, first_key_to_insert.clone(), value_to_insert.clone());
-            map.insert(&txn, second_key_to_insert.clone(), value_to_insert.clone());
-            assert_eq!(map.length(&txn), 2);
-
-            let delegate = Box::new(KeyDelegate::new());
-            map.keys(&txn, delegate);
-    //                     ^^^^^^^^ the trait `YrsMapIteratorDelegate` is not implemented for `KeyDelegate`
-    //                     Compiler error when invoking `cargo test`
-            assert_eq!(delegate.collected.len(), 2);
-        }
-
-     */
 }

@@ -1,7 +1,9 @@
 import Foundation
 import Testing
+import Synchronization
 @testable import YSwift
 
+@YSwiftActor
 @Suite("Yrs 0.28 migration")
 struct YrsMigrationTests {
     @Test(arguments: [UInt64(0), (UInt64(1) << 32) + 17, (UInt64(1) << 53) - 1])
@@ -207,37 +209,34 @@ struct YrsMigrationTests {
     }
 
     @Test
-    func undoObserverReentryReturnsError() async throws {
-        try await confirmation("Receives original and inverse undo entries", expectedCount: 2) { added in
-            try await confirmation("Receives the undo pop") { popped in
-                let document = YDocument()
-                let text = document.getOrCreateText(named: "text")
-                let manager: YUndoManager<NSObject> = document.undoManager(trackedRefs: [text])
-                try manager.observeAdded(key: "added") { _, metadata in
-                    added()
-                    #expect(throws: (any Error).self) { try manager.unobserveAdded(key: "added") }
-                    return metadata
+    func undoObserverCanAwaitSafeRemoval() async throws {
+        try await confirmation("Receives the original entry once") { received in
+            let document = YDocument()
+            let text = document.getOrCreateText(named: "text")
+            let manager: YUndoManager = try document.undoManager(trackedRefs: [text], timestamp: { 1 })
+            let (removals, completion) = AsyncStream<Bool>.makeStream()
+            try manager.observeAdded(key: "added") { _, metadata in
+                received()
+                Task {
+                    completion.yield(try await manager.unobserveAdded(key: "added"))
+                    completion.finish()
                 }
-                try manager.observePopped(key: "popped") { _, metadata in
-                    popped()
-                    #expect(throws: (any Error).self) { try manager.unobservePopped(key: "popped") }
-                    return metadata
-                }
-                document.transactSync { text.append("hello", in: $0) }
-                #expect(try manager.undo())
-                #expect(try manager.unobserveAdded(key: "added"))
-                #expect(try manager.unobservePopped(key: "popped"))
-                #expect(try manager.redo())
+                return metadata
             }
+            document.transactSync { text.append("hello", in: $0) }
+            var iterator = removals.makeAsyncIterator()
+            #expect(await iterator.next() == true)
+            #expect(try manager.undo())
+            #expect(try manager.redo())
         }
     }
 
     @Test
     func emptyUndoManagerCanTrackLater() throws {
         let document = YDocument()
-        let manager: YUndoManager<NSObject> = document.undoManager(trackedRefs: [])
+        let manager: YUndoManager = try document.undoManager(trackedRefs: [], timestamp: { 1 })
         let text = document.getOrCreateText(named: "text")
-        manager.track(text)
+        try manager.track(text)
         document.transactSync { text.append("hello", in: $0) }
         #expect(try manager.undo())
         #expect(text.getString() == "")

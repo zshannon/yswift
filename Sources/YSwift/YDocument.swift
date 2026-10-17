@@ -1,39 +1,30 @@
 import Foundation
-import Queue
-@preconcurrency import Yniffi
+import Yniffi
 
 /// YDocument holds YSwift shared data types and coordinates collaboration and changes.
-// The native document uses Rust synchronization; Swift transaction work is serialized
-// by AsyncQueue. As with the collection wrappers, callers must not mix the deprecated
-// sync transaction API with async transactions on the same document.
-public final class YDocument: @unchecked Sendable {
-    let document: YrsDoc
+@YSwiftActor
+public final class YDocument {
+    private let nativeDocument: @YSwiftActor () -> YrsDoc
 
-    // MARK: - Serialization Queues
-    // Two parallel worlds: sync (deprecated) and async (preferred)
-    // Don't mix - pick one paradigm and stick with it
-
-    /// GCD queue for deprecated sync APIs. Will be removed in future version.
-    private let syncQueue = DispatchQueue(label: "YSwift.YDocument.sync", qos: .userInitiated)
-
-    /// AsyncQueue for Swift 6 concurrency-native APIs (preferred).
-    private let asyncQueue = AsyncQueue()
+    var document: YrsDoc { nativeDocument() }
 
     /// Create a new YSwift Document.
-    public init() {
-        document = YrsDoc()
+    public nonisolated init() {
+        let document = YrsDoc()
+        nativeDocument = { @YSwiftActor in document }
     }
 
     /// Create a new YSwift Document with custom options.
     /// - Parameter options: Configuration options for the document.
-    public init(options: YDocumentOptions) {
+    public nonisolated init(options: YDocumentOptions) {
         precondition(options.clientId.map { $0 < (1 << 53) } ?? true, "Yrs client IDs must fit in 53 bits")
-        document = YrsDoc.newWithOptions(options: options.yrsOptions)
+        let document = YrsDoc.newWithOptions(options: options.yrsOptions)
+        nativeDocument = { @YSwiftActor in document }
     }
 
     /// Internal initializer for wrapping a YrsDoc (used when retrieving subdocuments).
     internal init(wrapping doc: YrsDoc) {
-        document = doc
+        nativeDocument = { @YSwiftActor in doc }
     }
 
     // MARK: - Identity Properties
@@ -86,11 +77,17 @@ public final class YDocument: @unchecked Sendable {
         document.destroy(parentTxn: transaction)
     }
 
+    /// Destroys a root document, invalidating native observers and undo tracking.
+    /// Subdocuments must instead use `destroy(in:)` with their parent's transaction.
+    public func destroyAsync() async throws {
+        try document.destroyRoot()
+    }
+
     // MARK: - Subdocument Observation
 
     /// Observes lifecycle events under a key in this document's transaction.
     /// Registering the same key replaces its previous callback.
-    public func observeSubdocs(key: String, transaction: YrsTransaction, _ body: @escaping (YSubdocsEvent) -> Void) {
+    public func observeSubdocs(key: String, transaction: YrsTransaction, _ body: @escaping @Sendable (YSubdocsEvent) -> Void) {
         document.observeSubdocs(tx: transaction, key: key, delegate: YSubdocsObservationDelegateWrapper(callback: body))
     }
 
@@ -104,7 +101,7 @@ public final class YDocument: @unchecked Sendable {
     public func observeSubdocsAsync() async -> AsyncStream<YSubdocsEvent> {
         let key = UUID().uuidString
         let (stream, continuation) = AsyncStream<YSubdocsEvent>.makeStream(bufferingPolicy: .unbounded)
-        await transact { transaction in
+        transact { transaction in
             self.observeSubdocs(key: key, transaction: transaction) { continuation.yield($0) }
         }
         continuation.onTermination = { _ in
@@ -118,7 +115,7 @@ public final class YDocument: @unchecked Sendable {
     }
 
     /// Observes destruction under a key in this document's transaction.
-    public func observeDestroy(key: String, transaction: YrsTransaction, _ body: @escaping () -> Void) {
+    public func observeDestroy(key: String, transaction: YrsTransaction, _ body: @escaping @Sendable () -> Void) {
         document.observeDestroy(tx: transaction, key: key, delegate: YDestroyObservationDelegateWrapper(callback: body))
     }
 
@@ -132,7 +129,7 @@ public final class YDocument: @unchecked Sendable {
     public func observeDestroyAsync() async -> AsyncStream<Void> {
         let key = UUID().uuidString
         let (stream, continuation) = AsyncStream<Void>.makeStream(bufferingPolicy: .unbounded)
-        await transact { transaction in
+        transact { transaction in
             self.observeDestroy(key: key, transaction: transaction) {
                 continuation.yield(())
                 continuation.finish()
@@ -153,13 +150,13 @@ public final class YDocument: @unchecked Sendable {
     /// Returns the GUIDs of all subdocuments in this document asynchronously.
     /// - Returns: An array of subdocument GUIDs.
     public func subdocGuidsAsync() async -> [String] {
-        await transact { $0.subdocGuids() }
+        transact { $0.subdocGuids() }
     }
 
     /// Returns all subdocuments in this document asynchronously.
     /// - Returns: An array of subdocuments.
     public func subdocsAsync() async -> [YDocument] {
-        await transact { txn in
+        transact { txn in
             txn.subdocs().map { YDocument(wrapping: $0) }
         }
     }
@@ -180,11 +177,9 @@ public final class YDocument: @unchecked Sendable {
         transaction.subdocs().map { YDocument(wrapping: $0) }
     }
 
-    // MARK: - Subdocument Queries (Deprecated Sync)
+    // MARK: - Subdocument Queries (Actor-isolated)
 
     /// Returns the GUIDs of all subdocuments in this document.
-    /// - Warning: Deprecated. Use async `subdocGuidsAsync()` or pass an explicit transaction.
-    @available(*, deprecated, message: "Use async subdocGuidsAsync() instead")
     public func subdocGuids(transaction: YrsTransaction? = nil) -> [String] {
         if let transaction = transaction {
             return transaction.subdocGuids()
@@ -194,8 +189,6 @@ public final class YDocument: @unchecked Sendable {
     }
 
     /// Returns all subdocuments in this document.
-    /// - Warning: Deprecated. Use async `subdocsAsync()` or pass an explicit transaction.
-    @available(*, deprecated, message: "Use async subdocsAsync() instead")
     public func subdocs(transaction: YrsTransaction? = nil) -> [YDocument] {
         if let transaction = transaction {
             return transaction.subdocs().map { YDocument(wrapping: $0) }
@@ -218,73 +211,22 @@ public final class YDocument: @unchecked Sendable {
         try! document.encodeDiffV1(tx: txn, stateVector: state)
     }
 
-    // MARK: - Async Transaction Methods (Preferred)
-
-    /// Creates an asynchronous transaction using Swift concurrency.
-    ///
-    /// This is the preferred way to interact with the document. Uses AsyncQueue
-    /// for proper Swift 6 concurrency integration.
-    ///
-    /// - Parameters:
-    ///   - origin: Optional origin identifier for this transaction.
-    ///   - changes: The closure in which you make changes to the document.
-    /// - Returns: The value that you return from the closure.
-    #if compiler(>=6.2)
-    public nonisolated(nonsending) func transact<T: Sendable>(origin: Origin? = nil, _ changes: @escaping @Sendable (YrsTransaction) -> T) async -> T {
-        await transactImpl(origin: origin, changes)
-    }
-    #else
-    public func transact<T: Sendable>(origin: Origin? = nil, _ changes: @escaping @Sendable (YrsTransaction) -> T) async -> T {
-        await transactImpl(origin: origin, changes)
-    }
-    #endif
-
-    private func transactImpl<T: Sendable>(origin: Origin? = nil, _ changes: @escaping @Sendable (YrsTransaction) -> T) async -> T {
-        await asyncQueue.addOperation { [self] in
-            let transaction = document.transact(origin: origin?.origin)
-            defer { transaction.free() }
-            return changes(transaction)
-        }.value
+    /// Runs a complete transaction without suspension on the YSwift actor.
+    /// The transaction cannot cross an actor boundary; return owned Sendable values.
+    public func transact<T: Sendable>(
+        origin: Origin? = nil,
+        _ changes: @YSwiftActor @Sendable (YrsTransaction) throws -> T
+    ) rethrows -> T {
+        let transaction = document.transact(origin: origin?.origin)
+        defer { transaction.free() }
+        return try changes(transaction)
     }
 
-    /// Creates an asynchronous throwing transaction using Swift concurrency.
-    #if compiler(>=6.2)
-    public nonisolated(nonsending) func transact<T: Sendable>(origin: Origin? = nil, _ changes: @escaping @Sendable (YrsTransaction) throws -> T) async throws -> T {
-        try await transactImpl(origin: origin, changes)
-    }
-    #else
-    public func transact<T: Sendable>(origin: Origin? = nil, _ changes: @escaping @Sendable (YrsTransaction) throws -> T) async throws -> T {
-        try await transactImpl(origin: origin, changes)
-    }
-    #endif
-
-    private func transactImpl<T: Sendable>(origin: Origin? = nil, _ changes: @escaping @Sendable (YrsTransaction) throws -> T) async throws -> T {
-        try await asyncQueue.addOperation { [self] in
-            let transaction = document.transact(origin: origin?.origin)
-            defer { transaction.free() }
-            return try changes(transaction)
-        }.value
-    }
-
-    // MARK: - Sync Transaction Methods (Deprecated)
-
-    /// Creates a synchronous transaction and provides that transaction to a trailing closure.
-    ///
-    /// - Warning: Deprecated. Use async `transact()` instead. Mixing sync and async
-    ///   transaction methods on the same document will cause race conditions.
-    ///
-    /// - Parameters:
-    ///   - origin: Optional origin identifier for this transaction.
-    ///   - changes: The closure in which you make changes to the document.
-    /// - Returns: The value that you return from the closure.
-    @available(*, deprecated, message: "Use async transact() instead. Mixing sync/async causes races.")
-    public func transactSync<T>(origin: Origin? = nil, _ changes: @escaping (YrsTransaction) -> T) -> T {
-        dispatchPrecondition(condition: .notOnQueue(syncQueue))
-        return syncQueue.sync {
-            let transaction = document.transact(origin: origin?.origin)
-            defer { transaction.free() }
-            return changes(transaction)
-        }
+    /// Synchronous convenience for code already running on the YSwift actor.
+    public func transactSync<T>(origin: Origin? = nil, _ changes: (YrsTransaction) throws -> T) rethrows -> T {
+        let transaction = document.transact(origin: origin?.origin)
+        defer { transaction.free() }
+        return try changes(transaction)
     }
 
     // MARK: - Factory methods
@@ -299,23 +241,38 @@ public final class YDocument: @unchecked Sendable {
     /// Retrieves or creates an Array shared data type.
     /// - Parameter named: The key you use to reference the Array shared data type.
     /// - Returns: The array shared type.
-    public func getOrCreateArray<T: Codable>(named: String) -> YArray<T> {
+    public func getOrCreateArray<T: Codable & Sendable>(named: String) -> YArray<T> {
         YArray(array: document.getArray(name: named), document: self)
     }
 
     /// Retrieves or creates a Map shared data type.
     /// - Parameter named: The key you use to reference the Map shared data type.
     /// - Returns: The map shared type.
-    public func getOrCreateMap<T: Codable>(named: String) -> YMap<T> {
+    public func getOrCreateMap<T: Codable & Sendable>(named: String) -> YMap<T> {
         YMap(map: document.getMap(name: named), document: self)
     }
 
-    /// Creates an Undo Manager for a document with the collections that is tracks.
-    /// - Parameter trackedRefs: The collections to track to undo and redo changes.
-    /// - Returns: A reference to the undo manager to control those actions.
-    public func undoManager<T: AnyObject>(trackedRefs: [YCollection]) -> YUndoManager<T> {
-        let mapped = trackedRefs.map { $0.pointer() }
-        return YUndoManager(manager: document.undoManager(trackedRefs: mapped))
+    /// Creates an undo manager whose collections may belong to different documents.
+    /// Supply a timestamp closure to control capture grouping in tests.
+    public func undoManager(
+        captureTimeoutMilliseconds: UInt64 = 500,
+        trackedRefs: [any YCollection],
+        timestamp: (@Sendable () -> UInt64)? = nil
+    ) throws -> YUndoManager {
+        let manager = YrsUndoManager(captureTimeoutMillis: captureTimeoutMilliseconds, clock: timestamp.map(YUndoClockDelegate.init))
+        for collection in trackedRefs {
+            try manager.addScope(doc: collection.document.document, trackedRef: collection.pointer())
+        }
+        return YUndoManager(manager: manager)
+    }
+
+    /// Creates and registers an undo manager on the YSwift actor.
+    public func undoManagerAsync(
+        captureTimeoutMilliseconds: UInt64 = 500,
+        trackedRefs: [any YCollection],
+        timestamp: (@Sendable () -> UInt64)? = nil
+    ) async throws -> YUndoManager {
+        try undoManager(captureTimeoutMilliseconds: captureTimeoutMilliseconds, trackedRefs: trackedRefs, timestamp: timestamp)
     }
 
     // MARK: - JSON Path Queries (Async)
@@ -333,7 +290,7 @@ public final class YDocument: @unchecked Sendable {
     /// - Returns: An array of JSON-encoded strings representing matching values.
     /// - Throws: `YrsJsonPathError` if the path expression is invalid.
     public func queryAsync(_ path: String) async throws -> [String] {
-        try await transact { txn in
+        try transact { txn in
             try txn.jsonPath(path: path)
         }
     }
@@ -349,11 +306,9 @@ public final class YDocument: @unchecked Sendable {
         try transaction.jsonPath(path: path)
     }
 
-    // MARK: - JSON Path Queries (Deprecated Sync)
+    // MARK: - JSON Path Queries (Actor-isolated)
 
     /// Queries the document using JSON path syntax.
-    /// - Warning: Deprecated. Use async `queryAsync(_:)` or pass an explicit transaction.
-    @available(*, deprecated, message: "Use async queryAsync(_:) instead")
     public func query(_ path: String, transaction: YrsTransaction? = nil) throws -> [String] {
         if let transaction = transaction {
             return try transaction.jsonPath(path: path)

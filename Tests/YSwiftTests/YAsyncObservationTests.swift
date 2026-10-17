@@ -1,6 +1,8 @@
 import Testing
+import Synchronization
 @testable import YSwift
 
+@YSwiftActor
 @Suite("Async observation without timed waits")
 struct YAsyncObservationTests {
     @Test

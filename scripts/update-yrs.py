@@ -123,7 +123,7 @@ def update():
     swift.write_text(re.sub(r'^let binaryChecksum = .*$', 'let binaryChecksum = ""', text, flags=re.M))
     summary = (f'Update vendored Yrs to published [{version}](https://crates.io/crates/yrs/{version}).\n\n'
                f'[Upstream changes](https://github.com/y-crdt/y-crdt/compare/{previous["revision"]}...{revision}).\n\n'
-               'The local undo-manager fix was rebased with Git three-way merge. '
+               'The local undo-manager and decoder corrections were rebased with Git three-way merge. '
                'The package uses a local framework until a new binary release is cut.\n\n')
     summary += ('Merge conflicts require resolution: ' + ', '.join(conflicts) + '.\n' if conflicts
                 else 'No merge conflicts. Native and Swift validation runs below.\n')

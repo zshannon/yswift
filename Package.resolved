@@ -1,14 +1,6 @@
 {
+  "originHash" : "6a76dd072721d20baaff12430224daa4d39f916362e6d1081d05cf74eb394315",
   "pins" : [
-    {
-      "identity" : "queue",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/mattmassicotte/Queue",
-      "state" : {
-        "revision" : "38826d0b8838ce5edcdafa1ffb2f507693d5abcb",
-        "version" : "0.2.2"
-      }
-    },
     {
       "identity" : "swift-docc-plugin",
       "kind" : "remoteSourceControl",
@@ -26,7 +18,16 @@
         "revision" : "b45d1f2ed151d057b54504d653e0da5552844e34",
         "version" : "1.0.0"
       }
+    },
+    {
+      "identity" : "swifterjson",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/guykogus/SwifterJSON",
+      "state" : {
+        "revision" : "0542d7260b97c1e551539af3d844c5641fe4b74d",
+        "version" : "5.0.1"
+      }
     }
   ],
-  "version" : 2
+  "version" : 3
 }

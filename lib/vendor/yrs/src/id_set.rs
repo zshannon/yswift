@@ -27,7 +27,11 @@ impl Decode for Range<u32> {
     fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, Error> {
         let clock = decoder.read_ds_clock()?;
         let len = decoder.read_ds_len()?;
-        Ok(clock..(clock + len))
+        if len == 0 {
+            return Err(Error::UnexpectedValue);
+        }
+        let end = clock.checked_add(len).ok_or(Error::UnexpectedValue)?;
+        Ok(clock..end)
     }
 }
 
@@ -97,8 +101,14 @@ impl Decode for IdRanges<()> {
         // decoder, so growth is bounded by the actual input length and it keeps its inline buffer
         // for the common small case. (State vector / block decoding use `try_reserve` directly.)
         let mut ranges = SmallVec::new();
+        let mut previous_end = 0;
         for _ in 0..len {
-            ranges.push((Range::decode(decoder)?, ()));
+            let range = Range::decode(decoder)?;
+            if range.start < previous_end {
+                return Err(Error::UnexpectedValue);
+            }
+            previous_end = range.end;
+            ranges.push((range, ()));
         }
         Ok(IdRanges::from_raw(ranges))
     }
@@ -360,6 +370,9 @@ impl Decode for IdSet {
         while i < client_len {
             decoder.reset_ds_cur_val();
             let client: u64 = decoder.read_var()?;
+            if client >= 1 << 53 {
+                return Err(Error::UnexpectedValue);
+            }
             let range = IdRange::decode(decoder)?;
             set.0.clients_mut().insert(ClientID::new(client), range);
             i += 1;

@@ -1,6 +1,7 @@
 use crate::array::YrsArray;
 use crate::doc::{YrsDoc, YrsOrigin};
 use crate::error::CodingError;
+use crate::id_set::YrsIdSet;
 use crate::map::YrsMap;
 use crate::text::YrsText;
 use parking_lot::ReentrantMutex;
@@ -172,5 +173,102 @@ impl YrsTransaction {
         let _guard = self.0.lock();
         // SAFETY: We hold the lock
         unsafe { *(*self.0.data_ptr()).get() = None };
+    }
+}
+
+/// Owned transaction data, valid beyond the callback or transaction lifetime.
+pub(crate) struct YrsTransactionChanges {
+    pub after_state: Vec<u8>,
+    pub before_state: Vec<u8>,
+    pub deletions: Arc<YrsIdSet>,
+    pub document_guid: String,
+    pub insertions: Arc<YrsIdSet>,
+    pub origin: Option<YrsOrigin>,
+}
+
+impl YrsTransactionChanges {
+    fn from_transaction(txn: &TransactionMut) -> Self {
+        Self {
+            // Snapshots may be taken before more changes are made in the same
+            // transaction. Do not populate Yrs's cached post-commit state early.
+            after_state: txn.state_vector().encode_v1(),
+            before_state: txn.before_state().encode_v1(),
+            deletions: Arc::new(YrsIdSet(txn.delete_set().clone())),
+            document_guid: txn.doc().guid().to_string(),
+            insertions: Arc::new(YrsIdSet(txn.insert_set().clone())),
+            origin: txn.origin().cloned().map(YrsOrigin::from),
+        }
+    }
+}
+
+pub(crate) trait YrsBeforeObserverDelegate: Send + Sync + std::fmt::Debug {
+    fn call(&self, changes: YrsTransactionChanges);
+}
+
+impl YrsTransaction {
+    pub(crate) fn insert_set(&self) -> Arc<YrsIdSet> {
+        let guard = self.transaction();
+        Arc::new(YrsIdSet(guard.as_ref().unwrap().insert_set().clone()))
+    }
+
+    pub(crate) fn delete_set(&self) -> Arc<YrsIdSet> {
+        let guard = self.transaction();
+        Arc::new(YrsIdSet(guard.as_ref().unwrap().delete_set().clone()))
+    }
+
+    pub(crate) fn changes(&self) -> YrsTransactionChanges {
+        let guard = self.transaction();
+        YrsTransactionChanges::from_transaction(guard.as_ref().unwrap())
+    }
+
+    pub(crate) fn observe_before_observer_calls(&self, key: String, delegate: Box<dyn YrsBeforeObserverDelegate>) {
+        let mut guard = self.transaction();
+        guard.as_mut().unwrap().observe_before_observer_calls(key.as_str(), move |txn| {
+            delegate.call(YrsTransactionChanges::from_transaction(txn));
+        });
+    }
+
+    pub(crate) fn unobserve_before_observer_calls(&self, key: String) -> bool {
+        let guard = self.transaction();
+        guard.as_ref().unwrap().unobserve_before_observer_calls(key.as_str())
+    }
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+    use std::sync::Mutex;
+    use yrs::{Doc, Text, Transact};
+
+    #[test]
+    fn snapshots_do_not_cache_the_final_state_before_commit() {
+        let doc = Doc::with_client_id(7);
+        let text = doc.get_or_insert_text("text");
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let callback_observed = observed.clone();
+        let mut txn = doc.transact_mut();
+        txn.observe_before_observer_calls("snapshot", move |txn| {
+            callback_observed.lock().unwrap().push(YrsTransactionChanges::from_transaction(txn));
+        });
+
+        text.push(&mut txn, "a");
+        let early = YrsTransactionChanges::from_transaction(&txn);
+        text.push(&mut txn, "b");
+        let late = YrsTransactionChanges::from_transaction(&txn);
+
+        let state = |bytes: &[u8]| StateVector::decode_v1(bytes).unwrap().get(&doc.client_id());
+        assert_eq!(state(&early.before_state), 0);
+        assert_eq!(state(&early.after_state), 1);
+        assert_eq!(state(&late.before_state), 0);
+        assert_eq!(state(&late.after_state), 2);
+        assert_eq!(early.insertions.ranges()[0].length, 1);
+        assert_eq!(late.insertions.ranges()[0].length, 2);
+        assert_eq!(txn.after_state().get(&doc.client_id()), 2);
+        drop(txn);
+
+        let events = observed.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(state(&events[0].after_state), 2);
+        assert_eq!(events[0].insertions.ranges()[0].length, 2);
     }
 }

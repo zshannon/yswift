@@ -4,7 +4,6 @@ use crate::map::YrsMap;
 use crate::subdoc::{YrsDestroyObservationDelegate, YrsDocOptions, YrsSubdocsEvent, YrsSubdocsObservationDelegate};
 use crate::text::YrsText;
 use crate::transaction::YrsTransaction;
-use crate::undo::YrsUndoManager;
 use crate::UniffiCustomTypeConverter;
 use parking_lot::ReentrantMutex;
 use std::cell::UnsafeCell;
@@ -89,15 +88,6 @@ impl YrsDoc {
         Arc::from(YrsTransaction::from(tx))
     }
 
-    pub(crate) fn undo_manager(&self, tracked_refs: Vec<YrsCollectionPtr>) -> Arc<YrsUndoManager> {
-        let doc = self.doc();
-        let mut undo_manager = yrs::undo::UndoManager::new();
-        for tracked_ref in tracked_refs {
-            undo_manager.expand_scope(doc.as_ref(), &tracked_ref);
-        }
-        Arc::new(YrsUndoManager::new(undo_manager, doc.as_ref().clone()))
-    }
-
     // MARK: - Subdoc methods
 
     /// Returns whether auto_load is enabled for this document.
@@ -118,6 +108,17 @@ impl YrsDoc {
         }
     }
 
+    pub(crate) fn destroy_root(&self) -> Result<(), crate::error::YrsDocumentError> {
+        let doc = self.doc();
+        let txn = doc.as_ref().try_transact().map_err(|_| crate::error::YrsDocumentError::PendingTransaction)?;
+        if txn.parent_doc().is_some() {
+            return Err(crate::error::YrsDocumentError::ParentTransactionRequired);
+        }
+        drop(txn);
+        doc.as_ref().destroy(None);
+        Ok(())
+    }
+
     /// Returns the globally unique identifier for this document.
     pub(crate) fn guid(&self) -> String {
         self.doc().as_ref().guid().to_string()
@@ -135,6 +136,7 @@ impl YrsDoc {
     pub(crate) fn new_with_options(options: YrsDocOptions) -> Self {
         let mut opts = Options::default();
         opts.auto_load = options.auto_load;
+        opts.cleanup_formatting = options.cleanup_formatting;
         if let Some(client_id) = options.client_id {
             opts.client_id = yrs::ClientID::new(client_id);
         }

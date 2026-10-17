@@ -14,6 +14,7 @@ enum YrsJsonPathError {
 /// Options for creating a YrsDoc with specific configuration.
 dictionary YrsDocOptions {
     boolean auto_load;
+    boolean cleanup_formatting;
     u64? client_id;
     string? guid;
     boolean should_load;
@@ -50,6 +51,8 @@ interface YrsDoc {
 
   // Subdoc lifecycle
   void destroy([ByRef] YrsTransaction parent_txn);
+  [Throws=YrsDocumentError]
+  void destroy_root();
   void load([ByRef] YrsTransaction parent_txn);
   YrsDoc? parent_doc();
   boolean ptr_eq([ByRef] YrsDoc other);
@@ -68,10 +71,14 @@ interface YrsDoc {
   YrsMap get_map(string name);
   YrsText get_text(string name);
   YrsTransaction transact(YrsOrigin? origin);
-  YrsUndoManager undo_manager(sequence<YrsCollectionPtr> tracked_refs);
 };
 
 interface YrsTransaction {
+  YrsIdSet insert_set();
+  YrsIdSet delete_set();
+  YrsTransactionChanges changes();
+  void observe_before_observer_calls(string key, YrsBeforeObserverDelegate delegate);
+  boolean unobserve_before_observer_calls(string key);
   [Throws=CodingError]
   void transaction_apply_update(sequence<u8> update);
 
@@ -114,9 +121,8 @@ interface YrsMap {
   [Throws=CodingError]
   string? remove([ByRef] YrsTransaction tx, string key);
   void clear([ByRef] YrsTransaction tx);
-  void keys([ByRef] YrsTransaction tx, YrsMapIteratorDelegate delegate);
-  void values([ByRef] YrsTransaction tx, YrsMapIteratorDelegate delegate);
-  void each([ByRef] YrsTransaction tx, YrsMapKVIteratorDelegate delegate);
+  sequence<string> keys([ByRef] YrsTransaction tx);
+  sequence<YrsMapEntry> entries([ByRef] YrsTransaction tx);
 
   boolean observe([ByRef] YrsTransaction tx, string key, YrsMapObservationDelegate delegate);
   boolean unobserve([ByRef] YrsTransaction tx, string key);
@@ -151,12 +157,9 @@ dictionary YrsMapChange {
     YrsEntryChange change;
 };
 
-callback interface YrsMapIteratorDelegate {
-    void call(string value);
-};
-
-callback interface YrsMapKVIteratorDelegate {
-    void call(string key, string value);
+dictionary YrsMapEntry {
+    string key;
+    string value;
 };
 
 callback interface YrsMapObservationDelegate {
@@ -165,7 +168,6 @@ callback interface YrsMapObservationDelegate {
 
 interface YrsArray {
   YrsCollectionPtr raw_ptr();
-  void each([ByRef] YrsTransaction tx, YrsArrayEachDelegate delegate);
 
   [Throws=CodingError]
   string get([ByRef] YrsTransaction tx, u32 index);
@@ -195,10 +197,6 @@ interface YrsArray {
   YrsArray push_array([ByRef] YrsTransaction tx);
   YrsMap push_map([ByRef] YrsTransaction tx);
   YrsText push_text([ByRef] YrsTransaction tx);
-};
-
-callback interface YrsArrayEachDelegate {
-    void call(string value);
 };
 
 callback interface YrsArrayObservationDelegate {
@@ -250,18 +248,24 @@ interface YrsDiff {
 /// A manager type able to track changes occurring in a context of a given document.
 /// These changes can be reverted using `undo` method call, or re-applied via `redo`.
 interface YrsUndoManager {
+    constructor(u64 capture_timeout_millis, YrsUndoClock? clock);
+    [Throws=YrsUndoError]
+    YrsUndoState state();
     /// Adds a specific origin identifier to a list of tracked origins. If tracked
     /// origin list is not empty, current undo manager will only track changes applied
     /// over transactions created with a specific origin.
+    [Throws=YrsUndoError]
     void add_origin(YrsOrigin origin);
 
     /// Removes an existing origin identifier from a list of tracked origins. If tracked
     /// origin list is not empty, current undo manager will only track changes applied
     /// over transactions created with a specific origin.
+    [Throws=YrsUndoError]
     void remove_origin(YrsOrigin origin);
 
     /// Adds a new shared collection to a list of entities observed by current undo manager.
-    void add_scope(YrsCollectionPtr tracked_ref);
+    [Throws=YrsUndoError]
+    void add_scope([ByRef] YrsDoc doc, YrsCollectionPtr tracked_ref);
 
     /// Undoes the last operation, pushing it onto redo stack, returning false if undo
     /// stack was empty an method had no effect.
@@ -277,11 +281,16 @@ interface YrsUndoManager {
 
     /// Wraps a set of recent changes together into a single undo operation. These
     /// changes will be be undone together on the next `undo` method call.
+    [Throws=YrsUndoError]
     void wrap_changes();
 
     /// Clears the undo/redo stacks of a current undo manager.
     [Throws=YrsUndoError]
     void clear();
+    [Throws=YrsUndoError]
+    void clear_undo();
+    [Throws=YrsUndoError]
+    void clear_redo();
 
     [Throws=YrsUndoError]
     void observe_added(string key, YrsUndoManagerObservationDelegate delegate);
@@ -300,24 +309,130 @@ interface YrsUndoManager {
 
     [Throws=YrsUndoError]
     boolean unobserve_popped(string key);
+
+    [Throws=YrsUndoError]
+    void observe_cleared(string key, YrsUndoClearedDelegate delegate);
+    [Throws=YrsUndoError]
+    boolean unobserve_cleared(string key);
 };
 
 [Error]
 enum YrsUndoError {
-  "PendingTransaction"
+  "PendingTransaction",
+  "DuplicateDocument"
 };
 
 callback interface YrsUndoManagerObservationDelegate {
-    u64 call(YrsUndoEvent e, u64 ptr);
+    sequence<u8>? call(YrsUndoEvent e, sequence<u8>? metadata);
 };
 
 interface YrsUndoEvent {
     YrsOrigin? origin();
     YrsUndoEventKind kind();
-    boolean has_changed(YrsCollectionPtr shared_ref);
+    sequence<YrsCollectionPtr> changed_refs();
+    string document_guid();
 };
 
 enum YrsUndoEventKind {
     "Undo",
     "Redo",
+};
+
+[Error]
+enum YrsIdError {
+    "InvalidClientId",
+    "InvalidRange",
+    "DecodingError",
+};
+
+dictionary YrsIdRange {
+    u64 client_id;
+    u32 clock;
+    u32 length;
+};
+
+interface YrsIdSet {
+    constructor();
+    [Name=from_ranges, Throws=YrsIdError]
+    constructor(sequence<YrsIdRange> ranges);
+    [Name=decode_v1, Throws=YrsIdError]
+    constructor(sequence<u8> data);
+    [Name=decode_v2, Throws=YrsIdError]
+    constructor(sequence<u8> data);
+    sequence<u8> encode_v1();
+    sequence<u8> encode_v2();
+    boolean is_empty();
+    u64 client_count();
+    sequence<YrsIdRange> ranges();
+    boolean equals([ByRef] YrsIdSet other);
+    [Throws=YrsIdError]
+    boolean contains(u64 client, u32 clock);
+    [Throws=YrsIdError]
+    YrsIdSet with_range(YrsIdRange range);
+    [Throws=YrsIdError]
+    YrsIdSet without_range(YrsIdRange range);
+    YrsIdSet union([ByRef] YrsIdSet other);
+    YrsIdSet difference([ByRef] YrsIdSet other);
+    YrsIdSet intersection([ByRef] YrsIdSet other);
+};
+
+dictionary YrsIdAttribute {
+    string name;
+    string value;
+};
+
+dictionary YrsIdMapRange {
+    sequence<YrsIdAttribute> attributes;
+    YrsIdRange range;
+};
+
+interface YrsIdMap {
+    constructor();
+    [Name=from_ranges, Throws=YrsIdError]
+    constructor(sequence<YrsIdMapRange> ranges);
+    [Name=from_set]
+    constructor([ByRef] YrsIdSet set, sequence<YrsIdAttribute> values);
+    [Name=decode_v1, Throws=YrsIdError]
+    constructor(sequence<u8> data);
+    [Name=decode_v2, Throws=YrsIdError]
+    constructor(sequence<u8> data);
+    sequence<u8> encode_v1();
+    sequence<u8> encode_v2();
+    boolean is_empty();
+    boolean equals([ByRef] YrsIdMap other);
+    [Throws=YrsIdError]
+    boolean contains(u64 client, u32 clock);
+    sequence<YrsIdMapRange> ranges();
+    [Throws=YrsIdError]
+    sequence<YrsIdMapRange> attributions(YrsIdRange range);
+    YrsIdSet as_id_set();
+    [Throws=YrsIdError]
+    YrsIdMap with_range(sequence<YrsIdAttribute> values, YrsIdRange range);
+    [Throws=YrsIdError]
+    YrsIdMap without_range(YrsIdRange range);
+    YrsIdMap union([ByRef] YrsIdMap other);
+    YrsIdMap intersection([ByRef] YrsIdMap other);
+    YrsIdMap difference([ByRef] YrsIdMap other);
+    YrsIdMap difference_set([ByRef] YrsIdSet other);
+};
+callback interface YrsUndoClock { u64 now(); };
+callback interface YrsUndoClearedDelegate { void call(boolean undo_cleared, boolean redo_cleared); };
+dictionary YrsUndoState {
+    sequence<string> document_guids;
+    u64 redo_count;
+    u64 undo_count;
+};
+
+[Error]
+enum YrsDocumentError { "ParentTransactionRequired", "PendingTransaction" };
+
+callback interface YrsBeforeObserverDelegate { void call(YrsTransactionChanges changes); };
+
+dictionary YrsTransactionChanges {
+    sequence<u8> after_state;
+    sequence<u8> before_state;
+    YrsIdSet deletions;
+    string document_guid;
+    YrsIdSet insertions;
+    YrsOrigin? origin;
 };

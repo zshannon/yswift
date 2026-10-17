@@ -1,7 +1,9 @@
 import Foundation
 import Testing
+import Synchronization
 @testable import YSwift
 
+@YSwiftActor
 @Suite
 final class YTextTests {
     var document: YDocument!
@@ -29,9 +31,9 @@ final class YTextTests {
 
     @Test
     func test_format() async {
-        let exercise: (Confirmation) -> sending Void = { [self] eventReceived in
-            let expectedAttributes = ["weight": "bold"]
-            var actualAttributes: [String: String] = [:]
+        let exercise: @YSwiftActor (Confirmation) -> sending Void = { [self] eventReceived in
+            let expectedAttributes: [String: JSON] = ["weight": "bold"]
+            let actualAttributes = Mutex<[String: JSON]>([:])
 
             self.text.document.transactSync { transaction in
                 self.text.observe(key: "test", transaction: transaction) { deltas in
@@ -39,11 +41,7 @@ final class YTextTests {
                     deltas.forEach {
                         switch $0 {
                         case let .retained(_, attrs):
-                            actualAttributes = Dictionary(
-                                uniqueKeysWithValues: attrs.map {
-                                    ($0, $1 as! String)
-                                }
-                            )
+                            actualAttributes.withLock { $0 = attrs }
                         default: break
                         }
                     }
@@ -57,16 +55,16 @@ final class YTextTests {
                 self.text.unobserve(key: "test", transaction: transaction)
             }
 
-            #expect((expectedAttributes) == (actualAttributes))
+            #expect((expectedAttributes) == (actualAttributes.withLock { $0 }))
         }
         await confirmation("Receives each change", expectedCount: 2, exercise)
     }
 
     @Test
     func test_insertWithAttributes() async {
-        let exercise: (Confirmation) -> sending Void = { [self] eventReceived in
-            let expectedAttributes = ["weight": "bold"]
-            var actualAttributes: [String: String] = [:]
+        let exercise: @YSwiftActor (Confirmation) -> sending Void = { [self] eventReceived in
+            let expectedAttributes: [String: JSON] = ["weight": "bold"]
+            let actualAttributes = Mutex<[String: JSON]>([:])
 
             self.text.document.transactSync { transaction in
                 self.text.observe(key: "test", transaction: transaction) { deltas in
@@ -74,11 +72,7 @@ final class YTextTests {
                     deltas.forEach {
                         switch $0 {
                         case let .inserted(_, attrs):
-                            actualAttributes = Dictionary(
-                                uniqueKeysWithValues: attrs.map {
-                                    ($0, $1 as! String)
-                                }
-                            )
+                            actualAttributes.withLock { $0 = attrs }
                         default: break
                         }
                     }
@@ -92,16 +86,16 @@ final class YTextTests {
             }
 
             #expect((String(text)) == ("abc"))
-            #expect((expectedAttributes) == (actualAttributes))
+            #expect((expectedAttributes) == (actualAttributes.withLock { $0 }))
         }
         await confirmation("Receives each change", expectedCount: 1, exercise)
     }
 
     @Test
     func test_insertEmbed() async {
-        let exercise: (Confirmation) -> sending Void = { [self] eventReceived in
+        let exercise: @YSwiftActor (Confirmation) -> sending Void = { [self] eventReceived in
             let embed = TestType(name: "Aidar", age: 24)
-            var insertedEmbed: TestType?
+            let insertedEmbed = Mutex<TestType?>(nil)
 
             self.text.document.transactSync { transaction in
                 self.text.observe(key: "test", transaction: transaction) { deltas in
@@ -109,7 +103,7 @@ final class YTextTests {
                     deltas.forEach {
                         switch $0 {
                         case let .inserted(value, _):
-                            insertedEmbed = Coder.decoded(value)
+                            insertedEmbed.withLock { $0 = Coder.decoded(value) }
                         default: break
                         }
                     }
@@ -122,20 +116,28 @@ final class YTextTests {
                 self.text.unobserve(key: "test", transaction: transaction)
             }
 
-            #expect((embed) == (insertedEmbed))
+            #expect((embed) == (insertedEmbed.withLock { $0 }))
             #expect((text.length()) == (1))
+            let chunks = text.diff()
+            if case let .embed(value, attributes) = chunks.first {
+                let decoded: TestType = Coder.decoded(value)
+                #expect(decoded == embed)
+                #expect(attributes.isEmpty)
+            } else {
+                Issue.record("Expected an embedded-object diff")
+            }
         }
         await confirmation("Receives each change", expectedCount: 1, exercise)
     }
 
     @Test
     func test_insertEmbedWithAttributes() async {
-        let exercise: (Confirmation) -> sending Void = { [self] eventReceived in
+        let exercise: @YSwiftActor (Confirmation) -> sending Void = { [self] eventReceived in
             let embed = TestType(name: "Aidar", age: 24)
-            var insertedEmbed: TestType?
+            let insertedEmbed = Mutex<TestType?>(nil)
 
-            let expectedAttributes = ["weight": "bold"]
-            var actualAttributes: [String: String] = [:]
+            let expectedAttributes: [String: JSON] = ["weight": "bold"]
+            let actualAttributes = Mutex<[String: JSON]>([:])
 
             self.text.document.transactSync { transaction in
                 self.text.observe(key: "test", transaction: transaction) { deltas in
@@ -143,12 +145,8 @@ final class YTextTests {
                     deltas.forEach {
                         switch $0 {
                         case let .inserted(value, attrs):
-                            insertedEmbed = Coder.decoded(value)
-                            actualAttributes = Dictionary(
-                                uniqueKeysWithValues: attrs.map {
-                                    ($0, $1 as! String)
-                                }
-                            )
+                            insertedEmbed.withLock { $0 = Coder.decoded(value) }
+                            actualAttributes.withLock { $0 = attrs }
                         default: break
                         }
                     }
@@ -161,8 +159,8 @@ final class YTextTests {
                 self.text.unobserve(key: "test", transaction: transaction)
             }
 
-            #expect((embed) == (insertedEmbed))
-            #expect((expectedAttributes) == (actualAttributes))
+            #expect((embed) == (insertedEmbed.withLock { $0 }))
+            #expect((expectedAttributes) == (actualAttributes.withLock { $0 }))
         }
         await confirmation("Receives each change", expectedCount: 1, exercise)
     }
@@ -183,8 +181,8 @@ final class YTextTests {
 
     @Test
     func test_closure_observation() async {
-        let exercise: (Confirmation) -> sending Void = { [self] eventReceived in
-            var insertedValue = String()
+        let exercise: @YSwiftActor (Confirmation) -> sending Void = { [self] eventReceived in
+            let insertedValue = Mutex("")
 
             self.text.document.transactSync { transaction in
                 self.text.observe(key: "test", transaction: transaction) { deltas in
@@ -192,7 +190,7 @@ final class YTextTests {
                     deltas.forEach {
                         switch $0 {
                         case let .inserted(value, _):
-                            insertedValue = Coder.decoded(value)
+                            insertedValue.withLock { $0 = Coder.decoded(value) }
                         default: break
                         }
                     }
@@ -205,7 +203,7 @@ final class YTextTests {
                 self.text.unobserve(key: "test", transaction: transaction)
             }
 
-            #expect((insertedValue) == ("test"))
+            #expect((insertedValue.withLock { $0 }) == ("test"))
         }
         await confirmation("Receives each change", expectedCount: 1, exercise)
     }
@@ -219,7 +217,7 @@ final class YTextTests {
     func test_closure_observation_IsLeakingwithoutUnobserving() {
         // Create an object (it can be of any type), and hold both
         // a strong and a weak reference to it
-        var object = NSObject()
+        var object = TestMetadata("capture")
         weak var weakObject = object
 
         self.text.document.transactSync { transaction in
@@ -235,7 +233,7 @@ final class YTextTests {
         // When we re-assign our local strong reference to a new object the
         // weak reference should still persist.
         // Because we didn't explicitly unobserved/unsubscribed.
-        object = NSObject()
+        object = TestMetadata("capture")
         #expect(weakObject != nil)
         
         self.text.document.transactSync { transaction in
@@ -247,7 +245,7 @@ final class YTextTests {
     func test_closure_observation_IsNotLeakingAfterUnobserving() {
         // Create an object (it can be of any type), and hold both
         // a strong and a weak reference to it
-        var object = NSObject()
+        var object = TestMetadata("capture")
         weak var weakObject = object
 
         self.text.document.transactSync { transaction in
@@ -269,7 +267,7 @@ final class YTextTests {
         // weak reference should become nil, since the closure should
         // have been run and removed at this point
         // Because we did explicitly unobserve/unsubscribe at this point.
-        object = NSObject()
+        object = TestMetadata("capture")
         #expect(weakObject == nil)
     }
 
@@ -375,13 +373,7 @@ final class YTextTests {
         await text.append("hello world")
 
         let diff = await text.diffAsync()
-        #expect((diff.count) == (1))
-        if case .text(let value, _) = diff[0] {
-            // The diff value is the raw text, not JSON
-            #expect(value.contains("hello world"))
-        } else {
-            Issue.record("Expected text diff")
-        }
+        #expect(diff == [.text(value: "hello world", attributes: [:])])
     }
 
     @Test

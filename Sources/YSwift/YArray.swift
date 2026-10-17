@@ -1,14 +1,15 @@
 import Foundation
-@preconcurrency import Yniffi
+import Yniffi
 
 /// A type that provides a list shared data type.
 ///
 /// Store, order, and retrieve any single `Codable` type within a `YArray`.
 ///
 /// Create a new `YArray` instance using ``YSwift/YDocument/getOrCreateArray(named:)`` from a ``YDocument``.
-public final class YArray<T: Codable>: Transactable, YCollection, @unchecked Sendable {
+@YSwiftActor
+public final class YArray<T: Codable & Sendable>: Transactable, YCollection {
     private let _array: YrsArray
-    let document: YDocument
+    public let document: YDocument
 
     init(array: YrsArray, document: YDocument) {
         _array = array
@@ -20,8 +21,8 @@ public final class YArray<T: Codable>: Transactable, YCollection, @unchecked Sen
     /// Returns the object at the index location asynchronously.
     /// - Parameter index: The location in the list to retrieve.
     /// - Returns: The instance at the location, or `nil` if unavailable.
-    public func get(index: Int) async -> T? where T: Sendable {
-        await document.transact { txn in
+    public func get(index: Int) async -> T? {
+        document.transact { txn in
             if let result = try? self._array.get(tx: txn, index: UInt32(index)) {
                 return Coder.decoded(result) as T?
             } else {
@@ -34,8 +35,8 @@ public final class YArray<T: Codable>: Transactable, YCollection, @unchecked Sen
     /// - Parameters:
     ///   - index: The location in the list to insert the object.
     ///   - value: The object to insert.
-    public func insert(at index: Int, value: T) async where T: Sendable {
-        await document.transact { txn in
+    public func insert(at index: Int, value: T) async {
+        document.transact { txn in
             self._array.insert(tx: txn, index: UInt32(index), value: Coder.encoded(value))
         }
     }
@@ -44,32 +45,32 @@ public final class YArray<T: Codable>: Transactable, YCollection, @unchecked Sen
     /// - Parameters:
     ///   - index: The location in the list to insert the objects.
     ///   - values: An array of objects to insert.
-    public func insertArray(at index: Int, values: [T]) async where T: Sendable {
-        await document.transact { txn in
+    public func insertArray(at index: Int, values: [T]) async {
+        document.transact { txn in
             self._array.insertRange(tx: txn, index: UInt32(index), values: Coder.encodedArray(values))
         }
     }
 
     /// Append an object to the end of the list asynchronously.
     /// - Parameter value: The object to insert.
-    public func append(_ value: T) async where T: Sendable {
-        await document.transact { txn in
+    public func append(_ value: T) async {
+        document.transact { txn in
             self._array.pushBack(tx: txn, value: Coder.encoded(value))
         }
     }
 
     /// Prepends an object at the beginning of the list asynchronously.
     /// - Parameter value: The object to insert.
-    public func prepend(_ value: T) async where T: Sendable {
-        await document.transact { txn in
+    public func prepend(_ value: T) async {
+        document.transact { txn in
             self._array.pushFront(tx: txn, value: Coder.encoded(value))
         }
     }
 
     /// Remove an object from the list asynchronously.
     /// - Parameter index: The index location of the object to remove.
-    public func remove(at index: Int) async where T: Sendable {
-        await document.transact { txn in
+    public func remove(at index: Int) async {
+        document.transact { txn in
             self._array.remove(tx: txn, index: UInt32(index))
         }
     }
@@ -78,31 +79,31 @@ public final class YArray<T: Codable>: Transactable, YCollection, @unchecked Sen
     /// - Parameters:
     ///   - start: The index location of the first object to remove.
     ///   - length: The number of objects to remove.
-    public func removeRange(start: Int, length: Int) async where T: Sendable {
-        await document.transact { txn in
+    public func removeRange(start: Int, length: Int) async {
+        document.transact { txn in
             self._array.removeRange(tx: txn, index: UInt32(start), len: UInt32(length))
         }
     }
 
     /// Returns the length of the list asynchronously.
-    public func lengthAsync() async -> UInt32 where T: Sendable {
-        await document.transact { txn in
+    public func lengthAsync() async -> UInt32 {
+        document.transact { txn in
             self._array.length(tx: txn)
         }
     }
 
     /// Returns the contents of the list as an array asynchronously.
-    public func toArrayAsync() async -> [T] where T: Sendable {
-        await document.transact { txn in
+    public func toArrayAsync() async -> [T] {
+        document.transact { txn in
             Coder.decodedArray(self._array.toA(tx: txn))
         }
     }
 
     /// Returns an async stream of array changes.
-    public func observeAsync() async -> AsyncStream<[YArrayChange<T>]> where T: Sendable {
+    public func observeAsync() async -> AsyncStream<[YArrayChange<T>]> {
         let key = UUID().uuidString
         let (stream, continuation) = AsyncStream<[YArrayChange<T>]>.makeStream(bufferingPolicy: .unbounded)
-        let observing = await document.transact { transaction in
+        let observing = document.transact { transaction in
             self.observe(key: key, transaction: transaction) { continuation.yield($0) }
         }
         continuation.onTermination = { _ in
@@ -112,7 +113,7 @@ public final class YArray<T: Codable>: Transactable, YCollection, @unchecked Sen
         return stream
     }
 
-    // MARK: - Sync APIs (Deprecated)
+    // MARK: - Actor-isolated transaction APIs
 
     /// The length of the list.
     public var count: Int {
@@ -125,12 +126,10 @@ public final class YArray<T: Codable>: Transactable, YCollection, @unchecked Sen
     }
 
     /// Returns the object at the index location you provide.
-    /// - Warning: Deprecated. Use async `get(index:)` or pass an explicit transaction.
     /// - Parameters:
     ///   - index: The location in the list to retrieve.
     ///   - transaction: An optional transaction to use when retrieving an object.
     /// - Returns: Returns the instance of a Codable type that was stored at the location you provided, or `nil` if it isn't available or couldn't be decoded.
-    @available(*, deprecated, message: "Use async get(index:) or pass explicit transaction")
     public func get(index: Int, transaction: YrsTransaction? = nil) -> T? {
         withTransaction(transaction) { txn in
             if let result = try? self._array.get(tx: txn, index: UInt32(index)) {
@@ -142,12 +141,10 @@ public final class YArray<T: Codable>: Transactable, YCollection, @unchecked Sen
     }
 
     /// Insert an object at an index location you provide.
-    /// - Warning: Deprecated. Use async `insert(at:value:)` or pass an explicit transaction.
     /// - Parameters:
     ///   - index: The location in the list to insert the object.
     ///   - value: The object to insert.
     ///   - transaction: An optional transaction to use when retrieving an object.
-    @available(*, deprecated, message: "Use async insert(at:value:) or pass explicit transaction")
     public func insert(at index: Int, value: T, transaction: YrsTransaction? = nil) {
         withTransaction(transaction) { txn in
             self._array.insert(tx: txn, index: UInt32(index), value: Coder.encoded(value))
@@ -155,12 +152,10 @@ public final class YArray<T: Codable>: Transactable, YCollection, @unchecked Sen
     }
 
     /// Inserts an array of objects at the index location you provide.
-    /// - Warning: Deprecated. Use async `insertArray(at:values:)` or pass an explicit transaction.
     /// - Parameters:
     ///   - index: The location in the list to insert the objects.
     ///   - values: An array of objects to insert.
     ///   - transaction: An optional transaction to use when retrieving an object.
-    @available(*, deprecated, message: "Use async insertArray(at:values:) or pass explicit transaction")
     public func insertArray(at index: Int, values: [T], transaction: YrsTransaction? = nil) {
         withTransaction(transaction) { txn in
             self._array.insertRange(tx: txn, index: UInt32(index), values: Coder.encodedArray(values))
@@ -168,11 +163,9 @@ public final class YArray<T: Codable>: Transactable, YCollection, @unchecked Sen
     }
 
     /// Append an object to the end of the list.
-    /// - Warning: Deprecated. Use async `append(_:)` or pass an explicit transaction.
     /// - Parameters:
     ///   - value: The object to insert.
     ///   - transaction: An optional transaction to use when retrieving an object.
-    @available(*, deprecated, message: "Use async append(_:) or pass explicit transaction")
     public func append(_ value: T, transaction: YrsTransaction? = nil) {
         withTransaction(transaction) { txn in
             self._array.pushBack(tx: txn, value: Coder.encoded(value))
@@ -180,11 +173,9 @@ public final class YArray<T: Codable>: Transactable, YCollection, @unchecked Sen
     }
 
     /// Prepends an object at the beginning of the list.
-    /// - Warning: Deprecated. Use async `prepend(_:)` or pass an explicit transaction.
     /// - Parameters:
     ///   - value: The object to insert.
     ///   - transaction: An optional transaction to use when retrieving an object.
-    @available(*, deprecated, message: "Use async prepend(_:) or pass explicit transaction")
     public func prepend(_ value: T, transaction: YrsTransaction? = nil) {
         withTransaction(transaction) { txn in
             self._array.pushFront(tx: txn, value: Coder.encoded(value))
@@ -192,11 +183,9 @@ public final class YArray<T: Codable>: Transactable, YCollection, @unchecked Sen
     }
 
     /// Remove an object from the list.
-    /// - Warning: Deprecated. Use async `remove(at:)` or pass an explicit transaction.
     /// - Parameters:
     ///   - index: The index location of the object to remove.
     ///   - transaction: An optional transaction to use when retrieving an object.
-    @available(*, deprecated, message: "Use async remove(at:) or pass explicit transaction")
     public func remove(at index: Int, transaction: YrsTransaction? = nil) {
         withTransaction(transaction) { txn in
             self._array.remove(tx: txn, index: UInt32(index))
@@ -204,12 +193,10 @@ public final class YArray<T: Codable>: Transactable, YCollection, @unchecked Sen
     }
 
     /// Removes a range of objects from the list, starting at the index position and for the number of elements you provide.
-    /// - Warning: Deprecated. Use async `removeRange(start:length:)` or pass an explicit transaction.
     /// - Parameters:
     ///   - start: The index location of the first object to remove.
     ///   - length: The number of objects to remove.
     ///   - transaction: An optional transaction to use when retrieving an object.
-    @available(*, deprecated, message: "Use async removeRange(start:length:) or pass explicit transaction")
     public func removeRange(start: Int, length: Int, transaction: YrsTransaction? = nil) {
         withTransaction(transaction) { txn in
             self._array.removeRange(tx: txn, index: UInt32(start), len: UInt32(length))
@@ -217,9 +204,7 @@ public final class YArray<T: Codable>: Transactable, YCollection, @unchecked Sen
     }
 
     /// Returns the length of the list.
-    /// - Warning: Deprecated. Use async `lengthAsync()` or pass an explicit transaction.
     /// - Parameter transaction: An optional transaction to use when retrieving an object.
-    @available(*, deprecated, message: "Use async lengthAsync() or pass explicit transaction")
     public func length(transaction: YrsTransaction? = nil) -> UInt32 {
         withTransaction(transaction) { txn in
             self._array.length(tx: txn)
@@ -227,9 +212,7 @@ public final class YArray<T: Codable>: Transactable, YCollection, @unchecked Sen
     }
 
     /// Returns the contents of the list as an array of objects.
-    /// - Warning: Deprecated. Use async `toArrayAsync()` or pass an explicit transaction.
     /// - Parameter transaction: An optional transaction to use when retrieving an object.
-    @available(*, deprecated, message: "Use async toArrayAsync() or pass explicit transaction")
     public func toArray(transaction: YrsTransaction? = nil) -> [T] {
         withTransaction(transaction) { txn in
             Coder.decodedArray(self._array.toA(tx: txn))
@@ -237,27 +220,21 @@ public final class YArray<T: Codable>: Transactable, YCollection, @unchecked Sen
     }
 
     /// Iterates over the list of elements, providing each element to the closure you provide.
-    /// - Warning: Deprecated. Use async `toArrayAsync()` and iterate the result instead.
     /// - Parameters:
     ///   - transaction: An optional transaction to use when retrieving an object.
     ///   - body: A closure that is called repeatedly with each element in the list.
-    @available(*, deprecated, message: "Use async toArrayAsync() and iterate instead")
     public func each(transaction: YrsTransaction? = nil, _ body: @escaping (T) -> Void) {
-        let delegate = YArrayEachDelegate(callback: body, decoded: Coder.decoded)
-        withTransaction(transaction) { txn in
-            self._array.each(tx: txn, delegate: delegate)
-        }
+        toArray(transaction: transaction).forEach(body)
     }
 
 
 
     /// Registers a closure that is called with an array of changes to the list.
-    /// - Warning: Deprecated. Use `observeAsync()` instead.
     /// - Parameter body: A closure that is called with an array of list changes.
     /// The key replaces any existing observer with the same key. Use this collection's document transaction.
     /// - Returns: False if the collection has been deleted.
     @discardableResult
-    public func observe(key: String, transaction: YrsTransaction, _ body: @escaping ([YArrayChange<T>]) -> Void) -> Bool {
+    public func observe(key: String, transaction: YrsTransaction, _ body: @escaping @Sendable ([YArrayChange<T>]) -> Void) -> Bool {
         let delegate = YArrayObservationDelegate(callback: body, decoded: Coder.decodedArray)
         return _array.observe(tx: transaction, key: key, delegate: delegate)
     }
@@ -269,10 +246,10 @@ public final class YArray<T: Codable>: Transactable, YCollection, @unchecked Sen
         _array.unobserve(tx: transaction, key: key)
     }
 
-    /// Removes an observer on the document's async transaction queue.
+    /// Removes an observer on the YSwift actor.
     @discardableResult
-    public func unobserveAsync(key: String) async -> Bool where T: Sendable {
-        await document.transact { transaction in
+    public func unobserveAsync(key: String) async -> Bool {
+        document.transact { transaction in
             self.unobserve(key: key, transaction: transaction)
         }
     }
@@ -282,92 +259,25 @@ public final class YArray<T: Codable>: Transactable, YCollection, @unchecked Sen
     }
 }
 
-extension YArray: Sequence {
-    public typealias Iterator = YArrayIterator
-
-    /// Returns an iterator for the list.
-    public func makeIterator() -> Iterator {
-        YArrayIterator(self)
-    }
-
-    public class YArrayIterator: IteratorProtocol {
-        private var indexPosition: Int
-        private var arrayRef: YArray
-
-        init(_ arrayRef: YArray) {
-            self.arrayRef = arrayRef
-            indexPosition = 0
-        }
-
-        public func next() -> T? {
-            if let item = arrayRef.get(index: indexPosition) {
-                indexPosition += 1
-                return item
-            }
-            return nil
-        }
-    }
-}
-
-// At the moment, below protocol implementations are "stub"-ish in nature
-// They need to be completed & tested after Iterator is ported from Rust side
-extension YArray: MutableCollection, RandomAccessCollection {
-    public func index(after i: Int) -> Int {
-        // precondition ensures index never goes past the bounds
-        precondition(i < endIndex, "Index out of bounds")
-        return i + 1
-    }
-
-    /// The location of the start of the list.
-    public var startIndex: Int {
-        0
-    }
-
-    /// The location at the end of the list.
-    public var endIndex: Int {
-        Int(length())
-    }
-
-    /// Inserts or returns the object in the list at the position you specify.
+extension YArray {
     public subscript(position: Int) -> T {
-        get {
-            precondition(position < endIndex, "Index out of bounds")
-            return get(index: position)!
-        }
-        set(newValue) {
-            precondition(position < endIndex, "Index out of bounds")
-            withTransaction { txn in
-                self.remove(at: position, transaction: txn)
-                self.insert(at: position, value: newValue, transaction: txn)
+        get { get(index: position)! }
+        set {
+            withTransaction { transaction in
+                self.remove(at: position, transaction: transaction)
+                self.insert(at: position, value: newValue, transaction: transaction)
             }
         }
     }
 }
 
-class YArrayEachDelegate<T: Codable>: YrsArrayEachDelegate {
-    private var callback: (T) -> Void
-    private var decoded: (String) -> T
+final class YArrayObservationDelegate<T: Codable & Sendable>: YrsArrayObservationDelegate {
+    private let callback: @Sendable ([YArrayChange<T>]) -> Void
+    private let decoded: @Sendable ([String]) -> [T]
 
     init(
-        callback: @escaping (T) -> Void,
-        decoded: @escaping (String) -> T
-    ) {
-        self.callback = callback
-        self.decoded = decoded
-    }
-
-    func call(value: String) {
-        callback(decoded(value))
-    }
-}
-
-class YArrayObservationDelegate<T: Codable>: YrsArrayObservationDelegate {
-    private var callback: ([YArrayChange<T>]) -> Void
-    private var decoded: ([String]) -> [T]
-
-    init(
-        callback: @escaping ([YArrayChange<T>]) -> Void,
-        decoded: @escaping ([String]) -> [T]
+        callback: @escaping @Sendable ([YArrayChange<T>]) -> Void,
+        decoded: @escaping @Sendable ([String]) -> [T]
     ) {
         self.callback = callback
         self.decoded = decoded
@@ -450,14 +360,14 @@ extension YArray {
 
 extension YArray {
     /// Returns a nested YMap at the specified index.
-    public func getMap<U: Codable>(at index: Int, transaction: YrsTransaction? = nil) -> YMap<U>? {
+    public func getMap<U: Codable & Sendable>(at index: Int, transaction: YrsTransaction? = nil) -> YMap<U>? {
         withTransaction(transaction) { txn in
             self._array.getMap(tx: txn, index: UInt32(index)).map { YMap<U>(map: $0, document: self.document) }
         }
     }
 
     /// Returns a nested YArray at the specified index.
-    public func getArray<U: Codable>(at index: Int, transaction: YrsTransaction? = nil) -> YArray<U>? {
+    public func getArray<U: Codable & Sendable>(at index: Int, transaction: YrsTransaction? = nil) -> YArray<U>? {
         withTransaction(transaction) { txn in
             self._array.getArray(tx: txn, index: UInt32(index)).map { YArray<U>(array: $0, document: self.document) }
         }
@@ -479,7 +389,7 @@ extension YArray {
 
     /// Inserts an empty nested YMap at the specified index.
     @discardableResult
-    public func insertMap<U: Codable>(at index: Int, transaction: YrsTransaction? = nil) -> YMap<U> {
+    public func insertMap<U: Codable & Sendable>(at index: Int, transaction: YrsTransaction? = nil) -> YMap<U> {
         withTransaction(transaction) { txn in
             YMap<U>(map: self._array.insertMap(tx: txn, index: UInt32(index)), document: self.document)
         }
@@ -487,7 +397,7 @@ extension YArray {
 
     /// Inserts an empty nested YArray at the specified index.
     @discardableResult
-    public func insertArray<U: Codable>(at index: Int, transaction: YrsTransaction? = nil) -> YArray<U> {
+    public func insertArray<U: Codable & Sendable>(at index: Int, transaction: YrsTransaction? = nil) -> YArray<U> {
         withTransaction(transaction) { txn in
             YArray<U>(array: self._array.insertArray(tx: txn, index: UInt32(index)), document: self.document)
         }
@@ -503,7 +413,7 @@ extension YArray {
 
     /// Pushes an empty nested YMap to the end of the array.
     @discardableResult
-    public func pushMap<U: Codable>(transaction: YrsTransaction? = nil) -> YMap<U> {
+    public func pushMap<U: Codable & Sendable>(transaction: YrsTransaction? = nil) -> YMap<U> {
         withTransaction(transaction) { txn in
             YMap<U>(map: self._array.pushMap(tx: txn), document: self.document)
         }
@@ -511,7 +421,7 @@ extension YArray {
 
     /// Pushes an empty nested YArray to the end of the array.
     @discardableResult
-    public func pushArray<U: Codable>(transaction: YrsTransaction? = nil) -> YArray<U> {
+    public func pushArray<U: Codable & Sendable>(transaction: YrsTransaction? = nil) -> YArray<U> {
         withTransaction(transaction) { txn in
             YArray<U>(array: self._array.pushArray(tx: txn), document: self.document)
         }

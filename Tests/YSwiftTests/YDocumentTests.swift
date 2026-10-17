@@ -1,7 +1,9 @@
 import Foundation
 import Testing
+import Synchronization
 @testable import YSwift
 
+@YSwiftActor
 @Suite
 final class YDocumentTests {
     @Test

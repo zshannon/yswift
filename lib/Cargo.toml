@@ -29,6 +29,6 @@ name = "uniffi_yniffi"
 path = "src/lib.rs"
 crate-type = ["staticlib"]
 
-# Yrs 0.28 destruction fix; see vendor/README.md.
+# Yrs 0.28 lifetime and decoder corrections; see vendor/README.md.
 [patch.crates-io]
 yrs = { path = "vendor/yrs" }

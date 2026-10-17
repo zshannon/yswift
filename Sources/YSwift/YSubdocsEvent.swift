@@ -1,45 +1,35 @@
-@preconcurrency import Yniffi
+import Yniffi
 
-/// An event emitted when subdocuments are added, loaded, or removed from a parent document.
+/// A lifecycle event with actor-isolated document handles.
 public struct YSubdocsEvent: Sendable {
-    /// Subdocuments that were added to the parent document.
-    public let added: [YDocument]
+    private let nativeEvent: @YSwiftActor () -> YrsSubdocsEvent
 
-    /// Subdocuments that were loaded.
-    public let loaded: [YDocument]
+    @YSwiftActor public var added: [YDocument] {
+        nativeEvent().added.map { YDocument(wrapping: $0) }
+    }
+    @YSwiftActor public var loaded: [YDocument] {
+        nativeEvent().loaded.map { YDocument(wrapping: $0) }
+    }
+    @YSwiftActor public var removed: [YDocument] {
+        nativeEvent().removed.map { YDocument(wrapping: $0) }
+    }
 
-    /// Subdocuments that were removed from the parent document.
-    public let removed: [YDocument]
-
-    init(from event: YrsSubdocsEvent) {
-        self.added = event.added.map { YDocument(wrapping: $0) }
-        self.loaded = event.loaded.map { YDocument(wrapping: $0) }
-        self.removed = event.removed.map { YDocument(wrapping: $0) }
+    init(from event: sending YrsSubdocsEvent) {
+        nativeEvent = { @YSwiftActor in event }
     }
 }
 
-/// Internal delegate for observing subdocument lifecycle changes.
-class YSubdocsObservationDelegateWrapper: YrsSubdocsObservationDelegate {
-    private let callback: (YSubdocsEvent) -> Void
+final class YSubdocsObservationDelegateWrapper: YrsSubdocsObservationDelegate {
+    private let callback: @Sendable (YSubdocsEvent) -> Void
+    init(callback: @escaping @Sendable (YSubdocsEvent) -> Void) { self.callback = callback }
 
-    init(callback: @escaping (YSubdocsEvent) -> Void) {
-        self.callback = callback
-    }
-
-    func call(event: YrsSubdocsEvent) {
+    func call(event: sending YrsSubdocsEvent) {
         callback(YSubdocsEvent(from: event))
     }
 }
 
-/// Internal delegate for observing document destroy events.
-class YDestroyObservationDelegateWrapper: YrsDestroyObservationDelegate {
-    private let callback: () -> Void
-
-    init(callback: @escaping () -> Void) {
-        self.callback = callback
-    }
-
-    func call() {
-        callback()
-    }
+final class YDestroyObservationDelegateWrapper: YrsDestroyObservationDelegate {
+    private let callback: @Sendable () -> Void
+    init(callback: @escaping @Sendable () -> Void) { self.callback = callback }
+    func call() { callback() }
 }

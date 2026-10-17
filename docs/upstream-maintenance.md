@@ -15,7 +15,7 @@ Only published stable releases are considered:
   index. The updater downloads that published crate and verifies its registry
   checksum before rebasing the local patch. Updates use one reusable
   `codex/yrs-upstream` PR, assigned to the fork owner.
-- Git's three-way merge preserves the local undo-manager fix. Conflicts, failed
+- Git's three-way merge preserves the documented native fixes. Conflicts, failed
   imports, and failed builds produce a draft PR and a failed workflow run.
 - Validation builds all five Apple target slices, runs native regression tests,
   and builds/tests Swift. It runs directly in this workflow because PRs created
@@ -60,3 +60,11 @@ published crate version in `upstream-yrs.json`. Regenerate `yrs-undo-drop.patch`
 with `a/` and `b/` paths relative to the crate root, then clear the `conflicts`
 array. Run `python3 scripts/update-yrs.py --check` before the native/Swift checks;
 CI rejects stale conflict metadata or a patch that cannot be reverse-applied.
+
+The pinned UniFFI generator is followed by `scripts/prepare-swift-bindings.py`.
+This step makes callback protocols Sendable, replaces the generated handle map's
+lock bookkeeping with standard `Mutex`, and registers immutable callback tables
+once. UniFFI retains their pointers, so the tables have process lifetime.
+It also declares the owned subdocument event transfer with `sending`.
+Generator layout drift fails explicitly. Keep this preparation step and the
+Swift 6 build gate when importing upstream releases.

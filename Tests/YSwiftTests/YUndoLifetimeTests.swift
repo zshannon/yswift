@@ -1,19 +1,21 @@
 import Foundation
 import Testing
+import Synchronization
 @testable import YSwift
 
+@YSwiftActor
 @Suite("Undo manager destruction")
 struct YUndoLifetimeTests {
     @Test
-    func releaseInsideTransaction() {
+    func releaseInsideTransaction() throws {
         let document = YDocument()
         let text = document.getOrCreateText(named: "text")
-        var manager: YUndoManager<NSObject>? = document.undoManager(trackedRefs: [text])
-        weak var releasedManager = manager
+        let manager = Mutex<YUndoManager?>(try document.undoManager(trackedRefs: [text], timestamp: { 1 }))
+        weak var releasedManager = manager.withLock { $0 }
 
         document.transactSync { transaction in
             text.append("a", in: transaction)
-            manager = nil
+            manager.withLock { $0 = nil }
             #expect(releasedManager == nil)
             text.append("b", in: transaction)
         }
@@ -23,18 +25,17 @@ struct YUndoLifetimeTests {
 
     @Test
     func releaseFromOwnObserver() async throws {
-        let exercise: (Confirmation) throws -> sending Void = { received in
+        let exercise: @YSwiftActor (Confirmation) throws -> sending Void = { received in
             let document = YDocument()
             let text = document.getOrCreateText(named: "text")
-            var manager: YUndoManager<NSObject>? = document.undoManager(trackedRefs: [text])
-            weak var releasedManager = manager
-            var callbackCapture: NSObject? = NSObject()
+            let manager = Mutex<YUndoManager?>(try document.undoManager(trackedRefs: [text], timestamp: { 1 }))
+            weak var releasedManager = manager.withLock { $0 }
+            var callbackCapture: TestMetadata? = TestMetadata("capture")
             weak var releasedCapture = callbackCapture
 
-            try manager?.observeAdded(key: "release") { [callbackCapture] _, metadata in
+            try manager.withLock { $0 }?.observeAdded(key: "release") { [callbackCapture] _, metadata in
                 received()
-                manager = nil
-                #expect(releasedManager == nil)
+                manager.withLock { $0 = nil }
                 #expect(callbackCapture != nil)
                 return metadata
             }
@@ -53,22 +54,22 @@ struct YUndoLifetimeTests {
     @Test
     func releaseFromCollectionObserver() async throws {
         try await confirmation("Released manager receives no undo event", expectedCount: 0) { undoEvent in
-            let exercise: (Confirmation) throws -> sending Void = { received in
+            let exercise: @YSwiftActor (Confirmation) throws -> sending Void = { received in
                 let document = YDocument()
                 let text = document.getOrCreateText(named: "text")
-                var manager: YUndoManager<NSObject>? = document.undoManager(trackedRefs: [text])
-                try manager?.observeAdded(key: "undo") { _, metadata in
+                let manager = Mutex<YUndoManager?>(try document.undoManager(trackedRefs: [text], timestamp: { 1 }))
+                try manager.withLock { $0 }?.observeAdded(key: "undo") { _, metadata in
                     undoEvent()
                     return metadata
                 }
                 document.transactSync { transaction in
                     #expect(text.observe(key: "release", transaction: transaction) { _ in
                         received()
-                        manager = nil
+                        manager.withLock { $0 = nil }
                     })
                     text.append("a", in: transaction)
                 }
-                #expect(manager == nil)
+                #expect(manager.withLock { $0 == nil })
                 document.transactSync { transaction in
                     #expect(text.unobserve(key: "release", transaction: transaction))
                     text.append("b", in: transaction)

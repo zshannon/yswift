@@ -323,11 +323,12 @@ where
 
     fn handle_destroy(txn: &TransactionMut, inner: &mut Inner<M>) {
         let origin = Origin::from(inner as *mut Inner<M> as usize);
-        // Just remove from tracked origins. The observer subscriptions will be cleaned up
-        // when the Observer itself is dropped (the doc is being destroyed).
-        inner.options.tracked_origins.remove(&origin);
+        // Keep the manager origin while other documents still need undo/redo capture.
         let doc_id = txn.doc().guid();
         inner.docs.remove(&doc_id);
+        if inner.docs.is_empty() {
+            inner.options.tracked_origins.remove(&origin);
+        }
         inner
             .undo_stack
             .0
@@ -401,8 +402,8 @@ where
     fn clear_internal(&mut self, clear_undo: bool, clear_redo: bool) {
         let inner = Arc::get_mut(self.state.as_mut().unwrap()).unwrap();
 
-        let undo_cleared = Self::clear_stack(&inner.scope, &inner.docs, &mut inner.undo_stack);
-        let redo_cleared = Self::clear_stack(&inner.scope, &inner.docs, &mut inner.redo_stack);
+        let undo_cleared = clear_undo && Self::clear_stack(&inner.scope, &inner.docs, &mut inner.undo_stack);
+        let redo_cleared = clear_redo && Self::clear_stack(&inner.scope, &inner.docs, &mut inner.redo_stack);
 
         if undo_cleared || redo_cleared {
             let e = StackClearedEvent::new(undo_cleared, redo_cleared);

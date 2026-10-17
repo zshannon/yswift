@@ -1,166 +1,245 @@
 import Foundation
-@preconcurrency import Yniffi
+import Yniffi
 
-/// An undo manager to track and reverse changes on YSwift collections.
-///
-/// The manager can be released during document transactions or observer callbacks.
-/// Destruction cancels its observers without acquiring a document transaction;
-/// native state stays alive until an already-running callback returns.
-///
-/// Set the one or more origins to track with ``addOrigin(_:)``.
-/// If no origins are set, the undo manager tracks changes from any origin.
-public final class YUndoManager<T: AnyObject> {
-    private let _manager: YrsUndoManager
+/// Tracks reversible changes across documents on the same actor as document transactions.
+/// Observers receive owned values and cannot synchronously reenter document mutation.
+@YSwiftActor
+public final class YUndoManager {
+    private let manager: YrsUndoManager
 
-    init(manager: YrsUndoManager) {
-        _manager = manager
+    init(manager: YrsUndoManager) { self.manager = manager }
+
+    public func addOrigin(_ origin: Origin) throws -> Void {
+        try manager.addOrigin(origin: origin.origin)
     }
 
-    /// Adds an origin that the Undo manager tracks.
-    /// - Parameter origin: The origin to track.
-    public func addOrigin(_ origin: Origin) {
-        _manager.addOrigin(origin: origin.origin)
+    public func addOriginAsync(_ origin: Origin) async throws -> Void {
+        try manager.addOrigin(origin: origin.origin)
     }
 
-    /// Removes an origin that the Undo manager tracks.
-    /// - Parameter origin: The origin to remove from tracking.
-    public func removeOrigin(_ origin: Origin) {
-        _manager.removeOrigin(origin: origin.origin)
+    public func removeOrigin(_ origin: Origin) throws -> Void {
+        try manager.removeOrigin(origin: origin.origin)
     }
 
-    /// Adds another collection to track with the Undo manager
-    /// - Parameter collection: The collection to track.
-    public func track(_ collection: YCollection) {
-        _manager.addScope(trackedRef: collection.pointer())
+    public func removeOriginAsync(_ origin: Origin) async throws -> Void {
+        try manager.removeOrigin(origin: origin.origin)
     }
 
-    /// Undo a change on a collection you're tracking back to the last point you set
-    ///
-    /// Set a point to undo back to with ``wrap()``.
-    /// Additional calls will undo to points further back on the stack, if set.
-    /// - Returns: A Boolean value that indicates wether the change was undone.
+    public func track(_ collection: any YCollection) throws -> Void {
+        try manager.addScope(doc: collection.document.document, trackedRef: collection.pointer())
+    }
+
+    public func trackAsync(_ collection: any YCollection) async throws -> Void {
+        try manager.addScope(doc: collection.document.document, trackedRef: collection.pointer())
+    }
+
     public func undo() throws -> Bool {
-        return try _manager.undo()
+        try manager.undo()
     }
 
-    /// Replays a change forward from the Undo managers stack.
-    /// - Returns: A Boolean value that indicates wether the change was replayed.
+    public func undoAsync() async throws -> Bool {
+        try manager.undo()
+    }
+
     public func redo() throws -> Bool {
-        return try _manager.redo()
+        try manager.redo()
     }
 
-    /// Mark a point in time that you want to be able to reverse back to.
-    ///
-    /// The Undo Manager tracks the points you set in a stack.
-    /// Undo the to the most recent point set using ``undo()``.
-    public func wrap() {
-        _manager.wrapChanges()
+    public func redoAsync() async throws -> Bool {
+        try manager.redo()
     }
 
-    /// Clears the stack of undo/redo actions.
-    public func clear() throws {
-        try _manager.clear()
-    }
-    
-    /// Registers an undo added callback under a key, replacing an existing callback with that key.
-    /// Call outside document transactions and undo callbacks.
-    public func observeAdded(key: String, _ body: @escaping (UndoEvent, T?) -> T?) throws {
-        let delegate = YUndoManagerObservationDelegate(callback: body)
-        try _manager.observeAdded(key: key, delegate: delegate)
+    public func wrap() throws -> Void {
+        try manager.wrapChanges()
     }
 
-    /// Removes an undo added callback. Throws if a transaction or undo callback is active.
+    public func wrapAsync() async throws -> Void {
+        try manager.wrapChanges()
+    }
+
+    public func clear() throws -> Void {
+        try manager.clear()
+    }
+
+    public func clearAsync() async throws -> Void {
+        try manager.clear()
+    }
+
+    public func clearUndo() throws -> Void {
+        try manager.clearUndo()
+    }
+
+    public func clearUndoAsync() async throws -> Void {
+        try manager.clearUndo()
+    }
+
+    public func clearRedo() throws -> Void {
+        try manager.clearRedo()
+    }
+
+    public func clearRedoAsync() async throws -> Void {
+        try manager.clearRedo()
+    }
+
+    public func state() throws -> YUndoState {
+        YUndoState(try manager.state())
+    }
+
+    public func stateAsync() async throws -> YUndoState {
+        YUndoState(try manager.state())
+    }
+
+    public func observeAdded(key: String, _ body: @escaping @Sendable (UndoEvent, Data?) -> Data?) throws {
+        try manager.observeAdded(key: key, delegate: YUndoManagerObservationDelegate(callback: body))
+    }
+
     @discardableResult
     public func unobserveAdded(key: String) throws -> Bool {
-        try _manager.unobserveAdded(key: key)
+        try manager.unobserveAdded(key: key)
     }
 
-    /// Registers an undo updated callback under a key, replacing an existing callback with that key.
-    /// Call outside document transactions and undo callbacks.
-    public func observeUpdated(key: String, _ body: @escaping (UndoEvent, T?) -> T?) throws {
-        let delegate = YUndoManagerObservationDelegate(callback: body)
-        try _manager.observeUpdated(key: key, delegate: delegate)
+    /// Registers before returning and yields owned snapshots through a standard AsyncStream.
+    public func observeAddedAsync() async throws -> AsyncStream<UndoEvent> {
+        let key = UUID().uuidString
+        let (stream, continuation) = AsyncStream<UndoEvent>.makeStream()
+        try observeAdded(key: key) { event, metadata in
+            continuation.yield(event)
+            return metadata
+        }
+        continuation.onTermination = { [self] _ in
+            Task { _ = try? await self.unobserveAdded(key: key) }
+        }
+        return stream
     }
 
-    /// Removes an undo updated callback. Throws if a transaction or undo callback is active.
+    public func observeUpdated(key: String, _ body: @escaping @Sendable (UndoEvent, Data?) -> Data?) throws {
+        try manager.observeUpdated(key: key, delegate: YUndoManagerObservationDelegate(callback: body))
+    }
+
     @discardableResult
     public func unobserveUpdated(key: String) throws -> Bool {
-        try _manager.unobserveUpdated(key: key)
+        try manager.unobserveUpdated(key: key)
     }
 
-    /// Registers an undo popped callback under a key, replacing an existing callback with that key.
-    /// Call outside document transactions and undo callbacks.
-    public func observePopped(key: String, _ body: @escaping (UndoEvent, T?) -> T?) throws {
-        let delegate = YUndoManagerObservationDelegate(callback: body)
-        try _manager.observePopped(key: key, delegate: delegate)
+    /// Registers before returning and yields owned snapshots through a standard AsyncStream.
+    public func observeUpdatedAsync() async throws -> AsyncStream<UndoEvent> {
+        let key = UUID().uuidString
+        let (stream, continuation) = AsyncStream<UndoEvent>.makeStream()
+        try observeUpdated(key: key) { event, metadata in
+            continuation.yield(event)
+            return metadata
+        }
+        continuation.onTermination = { [self] _ in
+            Task { _ = try? await self.unobserveUpdated(key: key) }
+        }
+        return stream
     }
 
-    /// Removes an undo popped callback. Throws if a transaction or undo callback is active.
+    public func observePopped(key: String, _ body: @escaping @Sendable (UndoEvent, Data?) -> Data?) throws {
+        try manager.observePopped(key: key, delegate: YUndoManagerObservationDelegate(callback: body))
+    }
+
     @discardableResult
     public func unobservePopped(key: String) throws -> Bool {
-        try _manager.unobservePopped(key: key)
+        try manager.unobservePopped(key: key)
+    }
+
+    /// Registers before returning and yields owned snapshots through a standard AsyncStream.
+    public func observePoppedAsync() async throws -> AsyncStream<UndoEvent> {
+        let key = UUID().uuidString
+        let (stream, continuation) = AsyncStream<UndoEvent>.makeStream()
+        try observePopped(key: key) { event, metadata in
+            continuation.yield(event)
+            return metadata
+        }
+        continuation.onTermination = { [self] _ in
+            Task { _ = try? await self.unobservePopped(key: key) }
+        }
+        return stream
+    }
+
+    public func observeCleared(key: String, _ body: @escaping @Sendable (YUndoClearedEvent) -> Void) throws {
+        try manager.observeCleared(key: key, delegate: YUndoClearedDelegate(callback: body))
+    }
+
+    @discardableResult
+    public func unobserveCleared(key: String) throws -> Bool { try manager.unobserveCleared(key: key) }
+
+    public func observeClearedAsync() async throws -> AsyncStream<YUndoClearedEvent> {
+        let key = UUID().uuidString
+        let (stream, continuation) = AsyncStream<YUndoClearedEvent>.makeStream()
+        try observeCleared(key: key) { continuation.yield($0) }
+        continuation.onTermination = { [self] _ in
+            Task { _ = try? await self.unobserveCleared(key: key) }
+        }
+        return stream
     }
 }
 
-class YUndoManagerObservationDelegate<T: AnyObject>: YrsUndoManagerObservationDelegate {
-    private var callback: (YrsUndoEvent, UInt64) -> UInt64
+/// A stable snapshot that remains valid after its native callback returns.
+public struct UndoEvent: Sendable {
+    public enum Kind: Sendable { case undo, redo }
 
-    init(callback: @escaping (UndoEvent, T?) -> T?) {
-        self.callback = { (event: YrsUndoEvent, ptr: UInt64) -> UInt64 in
-            let obj = callback(UndoEvent(event), YUndoManagerObservationDelegate.bridge(ptr: ptr))
-            return YUndoManagerObservationDelegate.bridge(obj: obj)
-        }
-    }
+    public let documentGuid: String
+    public let origin: Origin?
+    public let type: Kind
+    private let changedRefs: Set<UInt64>
 
-    func call(e: Yniffi.YrsUndoEvent, ptr: UInt64) -> UInt64 {
-        return callback(e, ptr)
-    }
-
-    static func bridge(obj: T?) -> UInt64 {
-        if let obj {
-            let ptr = UnsafeRawPointer(Unmanaged.passRetained(obj).toOpaque())
-            return UInt64(bitPattern: Int64(Int(bitPattern: ptr)))
-        } else {
-            return UInt64(bitPattern: Int64(Int(bitPattern: nil)))
-        }
-    }
-
-    static func bridge(ptr: UInt64) -> T? {
-        let unsafe_ptr = UnsafeRawPointer(bitPattern: Int(ptr))
-        if let unsafe_ptr {
-            return Unmanaged.fromOpaque(unsafe_ptr).takeRetainedValue()
-        } else {
-            return nil
-        }
-    }
-}
-
-/// Metadata about an undo event
-public struct UndoEvent {
-    let event: YrsUndoEvent
     init(_ event: YrsUndoEvent) {
-        self.event = event
+        documentGuid = event.documentGuid()
+        origin = event.origin().map(Origin.init)
+        type = event.kind() == .undo ? .undo : .redo
+        changedRefs = Set(event.changedRefs())
     }
-    
-    /// The type of undo event.
-    public var type: YrsUndoEventKind {
-        return event.kind()
+
+    /// Whether this event includes the collection or one of its descendants.
+    @YSwiftActor public func hasChanged(_ collection: any YCollection) -> Bool {
+        documentGuid == collection.document.guid && changedRefs.contains(collection.pointer())
     }
-    
-    /// The origin of the set of changes.
-    public var origin: Origin? {
-        let origin = event.origin()
-        if let origin {
-            return Origin(origin)
-        } else {
-            return nil
-        }
+}
+
+public struct YUndoState: Sendable {
+    public let documentGuids: [String]
+    public let redoCount: UInt64
+    public let undoCount: UInt64
+
+    public var canRedo: Bool { redoCount > 0 }
+    public var canUndo: Bool { undoCount > 0 }
+
+    init(_ state: YrsUndoState) {
+        documentGuids = state.documentGuids
+        redoCount = state.redoCount
+        undoCount = state.undoCount
     }
-    
-    /// <#Description#>
-    /// - Parameter sharedRef: <#sharedRef description#>
-    /// - Returns: <#description#>
-    public func hasChanged<T: YCollection>(_ sharedRef: T) -> Bool {
-        return event.hasChanged(sharedRef: sharedRef.pointer())
+}
+
+public struct YUndoClearedEvent: Equatable, Sendable {
+    public let redoCleared: Bool
+    public let undoCleared: Bool
+}
+
+final class YUndoClockDelegate: YrsUndoClock {
+    private let timestamp: @Sendable () -> UInt64
+
+    init(timestamp: @escaping @Sendable () -> UInt64) { self.timestamp = timestamp }
+    func now() -> UInt64 { timestamp() }
+}
+
+private final class YUndoClearedDelegate: YrsUndoClearedDelegate {
+    private let callback: @Sendable (YUndoClearedEvent) -> Void
+
+    init(callback: @escaping @Sendable (YUndoClearedEvent) -> Void) { self.callback = callback }
+    func call(undoCleared: Bool, redoCleared: Bool) {
+        callback(YUndoClearedEvent(redoCleared: redoCleared, undoCleared: undoCleared))
+    }
+}
+
+private final class YUndoManagerObservationDelegate: YrsUndoManagerObservationDelegate {
+    private let callback: @Sendable (UndoEvent, Data?) -> Data?
+
+    init(callback: @escaping @Sendable (UndoEvent, Data?) -> Data?) { self.callback = callback }
+
+    func call(e: YrsUndoEvent, metadata: [UInt8]?) -> [UInt8]? {
+        callback(UndoEvent(e), metadata.map { Data($0) }).map { Array($0) }
     }
 }

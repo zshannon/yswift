@@ -237,10 +237,11 @@ impl From<&yrs::types::text::Diff<()>> for YrsDiff {
             .unwrap_or_default();
 
         match &diff.insert {
+            Out::Any(Any::String(value)) => YrsDiff::Text { value: value.to_string(), attrs },
             Out::Any(any) => {
                 let mut buf = String::new();
                 any.to_json(&mut buf);
-                YrsDiff::Text { value: buf, attrs }
+                YrsDiff::Embed { value: buf, attrs }
             }
             _ => YrsDiff::Other { attrs }
         }

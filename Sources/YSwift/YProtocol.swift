@@ -5,7 +5,7 @@ import Foundation
  See https://github.com/yjs/y-protocols/blob/master/PROTOCOL.md
  */
 
-public struct YSyncMessage: Codable {
+public struct YSyncMessage: Codable, Sendable {
     public let kind: Kind
     public let buffer: Buffer
 
@@ -14,7 +14,7 @@ public struct YSyncMessage: Codable {
         self.buffer = buffer
     }
 
-    public enum Kind: Int, Codable {
+    public enum Kind: Int, Codable, Sendable {
         case STEP_1 = 0
         case STEP_2 = 1
         case UPDATE = 2
@@ -27,6 +27,7 @@ public typealias Buffer = [UInt8]
 /// A class that implements the Y-CRDT synchronization protocol.
 ///
 /// For more information on the synchronization protocol, see [Y Protocol Specification](https://github.com/yjs/y-protocols/blob/master/PROTOCOL.md).
+@YSwiftActor
 public final class YProtocol {
     private let document: YDocument
 

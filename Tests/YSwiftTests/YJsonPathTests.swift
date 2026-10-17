@@ -1,8 +1,10 @@
 import Foundation
 import Testing
+import Synchronization
 import Yniffi
 @testable import YSwift
 
+@YSwiftActor
 @Suite
 final class YJsonPathTests {
 

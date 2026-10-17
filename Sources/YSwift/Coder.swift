@@ -1,4 +1,5 @@
 import Foundation
+import SwifterJSON
 
 final class Coder {
     private static let decoder = JSONDecoder()
@@ -19,26 +20,14 @@ final class Coder {
         }
     }
 
-    static func encoded(_ value: [String: Any]) -> String {
-        if let jsonData = try? JSONSerialization.data(withJSONObject: value, options: []) {
-            return String(data: jsonData, encoding: .utf8) ?? ""
-        } else {
-            return ""
-        }
-    }
-
     static func decoded<T: Decodable>(_ stringValue: String) -> T {
         let data = stringValue.data(using: .utf8)!
         return try! decoder.decode(T.self, from: data)
     }
 
-    static func decoded(_ stringValue: String) -> [String: Any] {
-        if let jsonData = stringValue.data(using: .utf8) {
-            let jsonDict: [String: Any] = (try? JSONSerialization.jsonObject(with: jsonData, options: [])) as? [String: Any] ?? [:]
-            return jsonDict
-        } else {
-            return [:]
-        }
+    static func decoded(_ stringValue: String) -> [String: JSON] {
+        guard !stringValue.isEmpty else { return [:] }
+        return try! decoder.decode([String: JSON].self, from: Data(stringValue.utf8))
     }
 
     static func decoded<T: Decodable>(_ stringValue: String?) -> T? {

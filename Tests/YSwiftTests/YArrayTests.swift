@@ -1,7 +1,9 @@
 import Foundation
 import Testing
+import Synchronization
 @testable import YSwift
 
+@YSwiftActor
 @Suite
 final class YArrayTests {
     var document: YDocument!
@@ -35,11 +37,11 @@ final class YArrayTests {
         let joe = TestType(name: "Joe", age: 55)
         array.insertArray(at: 0, values: [aidar, joe])
 
-        #expect((array.filter { $0.name == "Aidar" }) == ([aidar]))
+        #expect((array.toArray().filter { $0.name == "Aidar" }) == ([aidar]))
 
-        #expect((array.map { TestType(name: "Mr. " + $0.name, age: 100) }) == ([TestType(name: "Mr. Aidar", age: 100), TestType(name: "Mr. Joe", age: 100)]))
+        #expect((array.toArray().map { TestType(name: "Mr. " + $0.name, age: 100) }) == ([TestType(name: "Mr. Aidar", age: 100), TestType(name: "Mr. Joe", age: 100)]))
 
-        #expect((array.reduce(into: 0) { sum, current in
+        #expect((array.toArray().reduce(into: 0) { sum, current in
                 sum += current.age
             }) == (79))
     }
@@ -146,7 +148,7 @@ final class YArrayTests {
             let localDocument = YDocument()
             let localArray: YArray<TestType> = localDocument.getOrCreateArray(named: "test")
 
-            var object = NSObject()
+            var object = TestMetadata("capture")
             weak var weakObject = object
 
             localDocument.transactSync { [object] txn in
@@ -154,7 +156,7 @@ final class YArrayTests {
                 localArray.insert(at: 0, value: .init(name: "Aidar", age: 24), transaction: txn)
             }
 
-            object = NSObject()
+            object = TestMetadata("capture")
             #expect(weakObject == nil)
             weakLocalArray = localArray
             weakLocalDocument = localDocument
@@ -164,33 +166,15 @@ final class YArrayTests {
     }
 
     @Test
-    func test_observation_closure() async {
-        let exercise: (Confirmation) -> sending Void = { [self] eventReceived in
-            let insertedElements = [TestType(name: "Aidar", age: 24), TestType(name: "Joe", age: 55)]
-            var receivedElements: [TestType] = []
-
-            self.array.document.transactSync { transaction in
-                self.array.observe(key: "test", transaction: transaction) { changes in
-                    eventReceived()
-                    changes.forEach {
-                        switch $0 {
-                        case let .added(elements):
-                            receivedElements = elements
-                        default: break
-                        }
-                    }
-                }
-            }
-
-            array.insertArray(at: 0, values: insertedElements)
-
-            self.array.document.transactSync { transaction in
-                self.array.unobserve(key: "test", transaction: transaction)
-            }
-
-            #expect((insertedElements) == (receivedElements))
+    func test_observation_closure() async throws {
+        try await confirmation("Receives the inserted elements") { received in
+            let inserted = [TestType(name: "Aidar", age: 24), TestType(name: "Joe", age: 55)]
+            var events = await array.observeAsync().makeAsyncIterator()
+            await array.insertArray(at: 0, values: inserted)
+            let event = try #require(await events.next())
+            received()
+            #expect(event == [.added(elements: inserted)])
         }
-        await confirmation("Receives each change", expectedCount: 1, exercise)
     }
 
     /*
@@ -202,7 +186,7 @@ final class YArrayTests {
     func test_observation_closure_IsLeakingWithoutUnobserving() {
         // Create an object (it can be of any type), and hold both
         // a strong and a weak reference to it
-        var object = NSObject()
+        var object = TestMetadata("capture")
         weak var weakObject = object
 
         self.array.document.transactSync { transaction in
@@ -218,7 +202,7 @@ final class YArrayTests {
         // When we re-assign our local strong reference to a new object the
         // weak reference should still persist.
         // Because we didn't explicitly unobserved/unsubscribed.
-        object = NSObject()
+        object = TestMetadata("capture")
         #expect(weakObject != nil)
         
         self.array.document.transactSync { transaction in
@@ -230,7 +214,7 @@ final class YArrayTests {
     func test_observation_closure_IsNotLeakingAfterUnobserving() {
         // Create an object (it can be of any type), and hold both
         // a strong and a weak reference to it
-        var object = NSObject()
+        var object = TestMetadata("capture")
         weak var weakObject = object
 
         self.array.document.transactSync { transaction in
@@ -252,7 +236,7 @@ final class YArrayTests {
         // weak reference should become nil, since the closure should
         // have been run and removed at this point
         // Because we did explicitly unobserve/unsubscribe at this point.
-        object = NSObject()
+        object = TestMetadata("capture")
         #expect(weakObject == nil)
     }
 

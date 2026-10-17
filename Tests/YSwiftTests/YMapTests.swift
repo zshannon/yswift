@@ -1,7 +1,9 @@
 import Foundation
 import Testing
+import Synchronization
 @testable import YSwift
 
+@YSwiftActor
 @Suite
 final class YMapTests {
     var document: YDocument!
@@ -117,18 +119,18 @@ final class YMapTests {
 
     @Test
     func test_observation_closure() async {
-        let exercise: (Confirmation) -> sending Void = { [self] eventReceived in
+        let exercise: @YSwiftActor (Confirmation) -> sending Void = { [self] eventReceived in
             let first = TestType(name: "Aidar", age: 24)
             let second = TestType(name: "Joe", age: 55)
             let updatedSecond = TestType(name: "Joe", age: 101)
 
-            var actualChanges: [YMapChange<TestType>] = []
+            let actualChanges = Mutex<[YMapChange<TestType>]>([])
 
             self.map.document.transactSync { transaction in
                 self.map.observe(key: "test", transaction: transaction) { changes in
                     eventReceived()
                     changes.forEach { change in
-                        actualChanges.append(change)
+                        actualChanges.withLock { $0.append(change) }
                     }
                 }
             }
@@ -144,7 +146,7 @@ final class YMapTests {
             }
 
             // Use set here, to compare two arrays by the composition not by order
-            #expect((Set(actualChanges)) == (Set([
+            #expect((Set(actualChanges.withLock { $0 })) == (Set([
                     .inserted(key: first.name, value: first),
                     .inserted(key: second.name, value: second),
                     .removed(key: first.name, value: first),
@@ -163,7 +165,7 @@ final class YMapTests {
     func test_observation_closure_IsLeakingWithoutUnobserving() {
         // Create an object (it can be of any type), and hold both
         // a strong and a weak reference to it
-        var object = NSObject()
+        var object = TestMetadata("capture")
         weak var weakObject = object
 
         self.map.document.transactSync { transaction in
@@ -179,7 +181,7 @@ final class YMapTests {
         // When we re-assign our local strong reference to a new object the
         // weak reference should still persist.
         // Because we didn't explicitly unobserved/unsubscribed.
-        object = NSObject()
+        object = TestMetadata("capture")
         #expect(weakObject != nil)
         
         self.map.document.transactSync { transaction in
@@ -191,7 +193,7 @@ final class YMapTests {
     func test_observation_closure_IsNotLeakingAfterUnobserving() {
         // Create an object (it can be of any type), and hold both
         // a strong and a weak reference to it
-        var object = NSObject()
+        var object = TestMetadata("capture")
         weak var weakObject = object
 
         self.map.document.transactSync { transaction in
@@ -213,7 +215,7 @@ final class YMapTests {
         // weak reference should become nil, since the closure should
         // have been run and removed at this point
         // Because we did explicitly unobserve/unsubscribe at this point.
-        object = NSObject()
+        object = TestMetadata("capture")
         #expect(weakObject == nil)
     }
 
@@ -546,16 +548,16 @@ final class YMapTests {
 
     @Test
     func test_observeWithNestedMapDoesNotCrash() async {
-        let exercise: (Confirmation) -> sending Void = { eventReceived in
+        let exercise: @YSwiftActor (Confirmation) -> sending Void = { eventReceived in
             // Test that observe() works when changes involve nested types
             let doc = YDocument()
             let root: YMap<String> = doc.getOrCreateMap(named: "root")
 
-            var observedChanges: [YMapChange<String>] = []
+            let observedChanges = Mutex<[YMapChange<String>]>([])
             root.document.transactSync { transaction in
                 root.observe(key: "test", transaction: transaction) { changes in
                     eventReceived()
-                    observedChanges.append(contentsOf: changes)
+                    observedChanges.withLock { $0.append(contentsOf: changes) }
                 }
             }
 
@@ -566,8 +568,8 @@ final class YMapTests {
             root["primitiveKey"] = "hello"
 
             // Only primitive change should be observed
-            #expect((observedChanges.count) == (1), "Should only observe primitive value changes")
-            if case .inserted(let key, let value) = observedChanges.first {
+            #expect((observedChanges.withLock { $0.count }) == (1), "Should only observe primitive value changes")
+            if case .inserted(let key, let value) = observedChanges.withLock({ $0.first }) {
                 #expect((key) == ("primitiveKey"))
                 #expect((value) == ("hello"))
             } else {
@@ -607,25 +609,25 @@ final class YMapTests {
 
     @Test
     func test_observeNestedMapChangesDirectly() async {
-        let exercise: (Confirmation) -> sending Void = { eventReceived in
+        let exercise: @YSwiftActor (Confirmation) -> sending Void = { eventReceived in
             // Test that we can observe changes on the nested map itself
             let doc = YDocument()
             let root: YMap<String> = doc.getOrCreateMap(named: "root")
             let nested: YMap<Int> = root.insertMap(forKey: "state")
 
-            var nestedChanges: [YMapChange<Int>] = []
+            let nestedChanges = Mutex<[YMapChange<Int>]>([])
             nested.document.transactSync { transaction in
                 nested.observe(key: "test", transaction: transaction) { changes in
                     eventReceived()
-                    nestedChanges.append(contentsOf: changes)
+                    nestedChanges.withLock { $0.append(contentsOf: changes) }
                 }
             }
 
             // Changes to nested map should be observed
             nested["count"] = 42
 
-            #expect((nestedChanges.count) == (1))
-            if case .inserted(let key, let value) = nestedChanges.first {
+            #expect((nestedChanges.withLock { $0.count }) == (1))
+            if case .inserted(let key, let value) = nestedChanges.withLock({ $0.first }) {
                 #expect((key) == ("count"))
                 #expect((value) == (42))
             } else {

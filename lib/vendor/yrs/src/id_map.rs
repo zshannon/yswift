@@ -404,22 +404,37 @@ impl<A: DeserializeOwned + PartialEq + Eq + Hash + Clone> Decode for IdMap<A> {
         for _ in 0..num_clients {
             decoder.reset_ds_cur_val();
             let diff: u64 = decoder.read_var()?;
-            let client = last_client_id + diff;
+            let client = last_client_id.checked_add(diff).ok_or(Error::UnexpectedValue)?;
+            if client >= 1 << 53 {
+                return Err(Error::UnexpectedValue);
+            }
             last_client_id = client;
             let num_ranges: u32 = decoder.read_var()?;
             let mut entries: SmallVec<[(Range<u32>, ContentAttributes<A>); 1]> = SmallVec::new();
+            let mut previous_end = 0;
 
             for _ in 0..num_ranges {
                 let range_clock = decoder.read_ds_clock()?;
                 let range_len = decoder.read_ds_len()?;
+                let range_end = range_clock.checked_add(range_len).ok_or(Error::UnexpectedValue)?;
+                if range_len == 0 || range_clock < previous_end {
+                    return Err(Error::UnexpectedValue);
+                }
+                previous_end = range_end;
                 let attrs_len: u32 = decoder.read_var()?;
                 let mut attrs: SmallVec<[ContentAttribute<A>; 2]> = SmallVec::new();
 
                 for _ in 0..attrs_len {
                     let attr_id: usize = decoder.read_var()?;
-                    if attr_id >= visited_attributions.len() {
+                    if attr_id > visited_attributions.len() {
+                        return Err(Error::UnexpectedValue);
+                    }
+                    if attr_id == visited_attributions.len() {
                         let attr_name_id: usize = decoder.read_var()?;
-                        if attr_name_id >= visited_attr_names.len() {
+                        if attr_name_id > visited_attr_names.len() {
+                            return Err(Error::UnexpectedValue);
+                        }
+                        if attr_name_id == visited_attr_names.len() {
                             let name = decoder.read_string()?.to_string();
                             visited_attr_names.push(name);
                         }
@@ -434,7 +449,7 @@ impl<A: DeserializeOwned + PartialEq + Eq + Hash + Clone> Decode for IdMap<A> {
                 }
 
                 entries.push((
-                    range_clock..(range_clock + range_len),
+                    range_clock..range_end,
                     ContentAttributes(attrs),
                 ));
             }

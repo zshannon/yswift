@@ -7,6 +7,7 @@ use crate::doc::YrsDoc;
 #[derive(Debug)]
 pub(crate) struct YrsDocOptions {
     pub auto_load: bool,
+    pub cleanup_formatting: bool,
     pub client_id: Option<u64>,
     pub guid: Option<String>,
     pub should_load: bool,

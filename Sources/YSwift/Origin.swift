@@ -1,7 +1,9 @@
-@preconcurrency import Yniffi
+import Yniffi
 
 /// A type that contains a reference to Yrs shared collection type.
-public protocol YCollection {
+@YSwiftActor
+public protocol YCollection: Sendable {
+    var document: YDocument { get }
     func pointer() -> YrsCollectionPtr
 }
 

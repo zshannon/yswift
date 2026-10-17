@@ -1,9 +1,12 @@
-@preconcurrency import Yniffi
+import Yniffi
 
 /// Options for creating a YDocument with custom configuration.
 public struct YDocumentOptions: Sendable {
     /// When set to true, the document will automatically load when accessed as a subdocument.
     public var autoLoad: Bool
+
+    /// Runs native rich-text formatting cleanup during transaction commit. Defaults to true.
+    public var cleanupFormatting: Bool
 
     /// A custom 53-bit client ID (0 through 2^53 - 1) for this document. If not provided, a random one will be generated.
     public var clientId: UInt64?
@@ -22,11 +25,13 @@ public struct YDocumentOptions: Sendable {
     ///   - shouldLoad: Whether the document should be loaded when accessed. Defaults to true.
     public init(
         autoLoad: Bool = false,
+        cleanupFormatting: Bool = true,
         clientId: UInt64? = nil,
         guid: String? = nil,
         shouldLoad: Bool = true
     ) {
         self.autoLoad = autoLoad
+        self.cleanupFormatting = cleanupFormatting
         self.clientId = clientId
         self.guid = guid
         self.shouldLoad = shouldLoad
@@ -36,6 +41,7 @@ public struct YDocumentOptions: Sendable {
     internal var yrsOptions: YrsDocOptions {
         YrsDocOptions(
             autoLoad: autoLoad,
+            cleanupFormatting: cleanupFormatting,
             clientId: clientId,
             guid: guid,
             shouldLoad: shouldLoad

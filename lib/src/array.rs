@@ -57,10 +57,6 @@ impl From<ArrayRef> for YrsArray {
     }
 }
 
-pub(crate) trait YrsArrayEachDelegate: Send + Sync + Debug {
-    fn call(&self, value: String);
-}
-
 pub(crate) trait YrsArrayObservationDelegate: Send + Sync + Debug {
     fn call(&self, value: Vec<YrsChange>);
 }
@@ -69,27 +65,6 @@ impl YrsArray {
     pub(crate) fn raw_ptr(&self) -> YrsCollectionPtr {
         let guard = self.inner();
         YrsCollectionPtr::from(guard.as_ref().as_ref())
-    }
-
-    pub(crate) fn each(
-        &self,
-        transaction: &YrsTransaction,
-        delegate: Box<dyn YrsArrayEachDelegate>,
-    ) {
-        let tx = transaction.transaction();
-        let tx = tx.as_ref().unwrap();
-
-        let arr = self.inner();
-        arr.as_ref().iter(tx).for_each(|val| {
-            let mut buf = String::new();
-            if let Out::Any(any) = val {
-                any.to_json(&mut buf);
-                delegate.call(buf);
-            } else {
-                // @TODO: fix silly handling, it will just call with empty string if casting fails
-                delegate.call(buf);
-            }
-        });
     }
 
     pub(crate) fn get(

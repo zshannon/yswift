@@ -1,14 +1,16 @@
 import Foundation
 import Testing
+import Synchronization
 @testable import YSwift
 
-class TestMetadata {
+final class TestMetadata: Sendable {
     public let value: String
     init(_ value: String) {
         self.value = value
     }
 }
 
+@YSwiftActor
 func exchangeUpdates(_ document1: YDocument, _ document2: YDocument) {
     let clock1 = document1.transactSync { txn in
         txn.transactionStateVector()
@@ -30,26 +32,27 @@ func exchangeUpdates(_ document1: YDocument, _ document2: YDocument) {
     }
 }
 
+@YSwiftActor
 @Suite
 final class YUndoManagerTests {
     var document: YDocument!
     var text: YText!
-    var manager: YUndoManager<TestMetadata>!
+    var manager: YUndoManager!
 
-    init() {
+    init() throws {
         document = YDocument()
         text = document.getOrCreateText(named: "test")
-        manager = document.undoManager(trackedRefs: [text])
+        manager = try document.undoManager(trackedRefs: [text], timestamp: { 1 })
     }
 
     @Test
     func test_undoTextBasic() throws {
         text.insert("1221", at: 0)
-        manager.wrap()
+        try manager.wrap()
         text.insert("3", at: 2)
-        manager.wrap()
+        try manager.wrap()
         text.insert("3", at: 3)
-        manager.wrap()
+        try manager.wrap()
 
         #expect((text.getString()) == ("123321"))
 
@@ -65,28 +68,28 @@ final class YUndoManagerTests {
 
     @Test
     func test_undoEvents() async throws {
-        let exercise: (Confirmation) throws -> sending Void = { [self] eventReceived in
-            var received = TestMetadata("")
+        let exercise: @YSwiftActor (Confirmation) throws -> sending Void = { [self] eventReceived in
+            let received = Mutex(Data())
 
-            try manager.observeAdded(key: "added", { (e, metadata) -> TestMetadata? in
+            try manager.observeAdded(key: "added", { (e, metadata) -> Data? in
                     eventReceived()
-                let m = metadata ?? TestMetadata("")
-                return TestMetadata(m.value + "A")
+                let m = metadata ?? Data()
+                return m + Data("A".utf8)
             })
 
-            try manager.observePopped(key: "popped", { (e, metadata) -> TestMetadata? in
+            try manager.observePopped(key: "popped", { (e, metadata) -> Data? in
                     eventReceived()
-                received = metadata!
+                received.withLock { $0 = metadata! }
                 return metadata
             })
 
             text.insert("abc", at: 0)
 
             #expect(try manager.undo())
-            #expect((received.value) == ("A"))
+            #expect((received.withLock { String(decoding: $0, as: UTF8.self) }) == ("A"))
 
             #expect(try manager.redo())
-            #expect((received.value) == ("A"))
+            #expect((received.withLock { String(decoding: $0, as: UTF8.self) }) == ("A"))
 
             try manager.unobserveAdded(key: "added")
             try manager.unobservePopped(key: "popped")
@@ -100,13 +103,13 @@ final class YUndoManagerTests {
 
         let remoteDocument = YDocument()
         let remoteText = remoteDocument.getOrCreateText(named: "test")
-        manager.addOrigin(localOrigin) // only track transaction from local origin
+        try manager.addOrigin(localOrigin) // only track transaction from local origin
 
         // create some changes locally
         document.transactSync(origin: localOrigin) { txn in
             self.text.insert("hello", at: 0, in: txn)
         }
-        self.manager.wrap() // add changes on a stack: they will be undone as one
+        try self.manager.wrap() // add changes on a stack: they will be undone as one
 
         exchangeUpdates(document, remoteDocument)
 
@@ -114,7 +117,7 @@ final class YUndoManagerTests {
         document.transactSync(origin: localOrigin) { txn in
             self.text.insert(" world", at: 5, in: txn)
         }
-        self.manager.wrap() // add next batch of changes on a stack
+        try self.manager.wrap() // add next batch of changes on a stack
         remoteText.insert("<break>", at: 1)
 
         #expect((text.getString()) == ("hello world"))

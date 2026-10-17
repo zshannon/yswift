@@ -8,9 +8,10 @@ The upstream MIT license is copied into `yrs/LICENSE`; Cargo registry metadata i
 
 The initial baseline was crates.io Yrs 0.28.0, commit
 `23b7f5693bbf9e7d26340c521ee8647f79bdfba2`, with only `src/observer.rs` and
-`src/undo.rs` patched. Weekly updates package upstream main and rebase this diff
-using Git's three-way merge. Conflicts are preserved in a draft PR, never silently
-discarded. See [upstream maintenance](../../docs/upstream-maintenance.md).
+`src/undo.rs` patched. Weekly updates download published stable crates, verify
+their registry checksums, and rebase this diff using Git's three-way merge.
+Unreleased commits are ignored. Conflicts are preserved in a draft PR, never
+silently discarded. See [upstream maintenance](../../docs/upstream-maintenance.md).
 
 Upstream UndoManager::drop acquires document transactions to unregister its observers.
 That panics when another transaction is active. Ignoring the failure is unsafe because

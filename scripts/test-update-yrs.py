@@ -9,6 +9,27 @@ updater = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(updater)
 
 
+class ReleaseSelectionTests(unittest.TestCase):
+    def test_selects_numeric_stable_release_and_excludes_prereleases_and_yanked_versions(self):
+        entries = [{'vers': version, 'yanked': yanked} for version, yanked in [
+            ('0.9.0', False), ('0.28.0', False), ('0.29.0-rc.1', False), ('0.30.0', True),
+        ]]
+        self.assertEqual(updater.latest_release(entries)['vers'], '0.28.0')
+
+    def test_same_published_version_and_checksum_is_not_an_update(self):
+        previous = {'version': '0.28.0', 'archive_sha256': 'published', 'revision': 'older-main'}
+        self.assertFalse(updater.needs_update(previous, {'vers': '0.28.0', 'cksum': 'published'}))
+
+    def test_new_release_is_an_update_but_older_release_is_not(self):
+        previous = {'version': '0.28.0', 'archive_sha256': 'published'}
+        self.assertTrue(updater.needs_update(previous, {'vers': '0.29.0', 'cksum': 'new'}))
+        self.assertFalse(updater.needs_update(previous, {'vers': '0.27.2', 'cksum': 'old'}))
+
+    def test_unreleased_archive_is_replaced_with_published_version(self):
+        previous = {'version': '0.28.0', 'archive_sha256': 'built-from-main'}
+        self.assertTrue(updater.needs_update(previous, {'vers': '0.28.0', 'cksum': 'published'}))
+
+
 class VendorMergeTests(unittest.TestCase):
     def exercise(self, base, ours, theirs):
         with tempfile.TemporaryDirectory() as directory:

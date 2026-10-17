@@ -25,39 +25,81 @@ jobs:
     permissions:
       actions: write
     steps:
-      - uses: liskin/gh-workflow-keepalive@581532d619d4390ec4ec5c34376cee42462fd1d6 # v1
+      - uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            await github.rest.actions.enableWorkflow({ ...context.repo, workflow_id: 'upstream.yml' });
 
   yswift:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       pull-requests: write
     outputs:
       pull-request: ${{ steps.check.outputs.pull-request }}
     steps:
-      - name: Open or update upstream YSwift pull request
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+      # This job only manipulates source as data. Validation runs without write access.
+      - name: Open or update published YSwift pull request
         id: check
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
           script: |
+            const fs = require('node:fs');
             const repo = context.repo;
             const base = context.payload.repository.default_branch;
-            const head = 'y-crdt:main';
+            const statePath = '.github/upstream-yswift.json';
+            const previous = fs.existsSync(statePath) ? JSON.parse(fs.readFileSync(statePath, 'utf8')) : null;
+            const { data: release } = await github.rest.repos.getLatestRelease({ owner: 'y-crdt', repo: 'yswift' });
+            if (release.draft || release.prerelease) throw new Error('Expected a published stable YSwift release.');
+            const { data: commit } = await github.rest.repos.getCommit({ owner: 'y-crdt', repo: 'yswift', ref: release.tag_name });
             const { data: comparison } = await github.rest.repos.compareCommitsWithBasehead({
-              ...repo, basehead: `${base}...${head}`
+              ...repo, basehead: `${previous?.revision || base}...${commit.sha}`
             });
             if (!comparison.ahead_by) {
-              core.info('Upstream YSwift is already merged.');
+              core.info(`Published YSwift ${release.tag_name} is already imported.`);
               return;
             }
+            await exec.exec('git', ['fetch', '--no-tags', 'https://github.com/y-crdt/yswift.git', commit.sha]);
+            const baseline = previous?.revision || (await exec.getExecOutput('git', ['merge-base', 'HEAD', commit.sha])).stdout.trim();
+            const patch = await exec.getExecOutput('git', ['diff', '--binary', baseline, commit.sha, '--', '.', ':(exclude).github/workflows'], { silent: true });
+            const patchPath = `${process.env.RUNNER_TEMP}/yswift-release.patch`;
+            fs.writeFileSync(patchPath, patch.stdout);
+            let conflicts = '';
+            if (patch.stdout) {
+              const result = await exec.exec('git', ['apply', '--3way', '--index', patchPath], { ignoreReturnCode: true });
+              conflicts = (await exec.getExecOutput('git', ['diff', '--name-only', '--diff-filter=U'])).stdout.trim();
+              if (result && !conflicts) throw new Error('Unable to apply the published release delta.');
+            }
+            fs.writeFileSync(statePath, JSON.stringify({ revision: commit.sha, version: release.tag_name }, null, 2) + '\n');
+            const native = await exec.exec('git', ['diff', '--quiet', 'HEAD', '--', 'lib/src', 'lib/vendor/yrs', 'lib/Cargo.toml', 'lib/Cargo.lock', 'lib/swift/scaffold'], { ignoreReturnCode: true });
+            if (native) {
+              const manifest = fs.readFileSync('Package.swift', 'utf8')
+                .replace(/^let binaryURL: String\? = .*$/m, 'let binaryURL: String? = nil')
+                .replace(/^let binaryChecksum = .*$/m, 'let binaryChecksum = ""');
+              fs.writeFileSync('Package.swift', manifest);
+            }
+            await exec.exec('git', ['config', 'user.name', 'github-actions[bot]']);
+            await exec.exec('git', ['config', 'user.email', '41898282+github-actions[bot]@users.noreply.github.com']);
+            await exec.exec('git', ['add', '--all']);
+            await exec.exec('git', ['commit', '-m', `Import published YSwift ${release.tag_name}`]);
+            const branch = 'codex/yswift-upstream';
+            await exec.exec('git', ['push', '--force', 'origin', `HEAD:refs/heads/${branch}`]);
+            const head = `${repo.owner}:${branch}`;
             const { data: existing } = await github.rest.pulls.list({ ...repo, base, head, state: 'open' });
-            const body = `Merge upstream YSwift main (${comparison.ahead_by} new commits).\n\n` +
-              `[Changes](${comparison.html_url}).\n\n` +
+            const title = `Import published YSwift ${release.tag_name}`;
+            const body = `Import [YSwift ${release.tag_name}](${release.html_url}) at ${commit.sha}.\n\n` +
+              `[Upstream changes](${comparison.html_url}). Fork-owned CI workflows are retained.\n\n` +
+              (conflicts ? `Resolve these merge conflicts:\n\n${conflicts}\n\n` : 'No source merge conflicts.\n\n') +
               `Native and Swift validation: ${context.serverUrl}/${repo.owner}/${repo.repo}/actions/runs/${context.runId}. ` +
-              'Conflicts and API changes require review; this workflow never merges automatically.';
+              'Review the source changes and validation before marking this draft ready. This workflow never merges automatically.';
             const { data: pr } = existing.length
-              ? await github.rest.pulls.update({ ...repo, pull_number: existing[0].number, body })
-              : await github.rest.pulls.create({ ...repo, base, head, title: 'Merge upstream YSwift changes', body });
+              ? await github.rest.pulls.update({ ...repo, pull_number: existing[0].number, title, body })
+              : await github.rest.pulls.create({ ...repo, base, head, title, body, draft: true });
+            if (!pr.draft) await github.graphql('mutation($id: ID!) { convertPullRequestToDraft(input: {pullRequestId: $id}) { pullRequest { id } } }', { id: pr.node_id });
             await github.rest.issues.addAssignees({ ...repo, issue_number: pr.number, assignees: [repo.owner] });
             core.setOutput('pull-request', pr.number);
             await core.summary.addLink(`YSwift PR #${pr.number}`, pr.html_url).write();
@@ -85,28 +127,16 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.13'
-      - name: Check upstream revision
+      - name: Check published Yrs releases
         id: check
-        run: |
-          git clone --depth 1 https://github.com/y-crdt/y-crdt.git "$RUNNER_TEMP/y-crdt"
-          python3 - <<'PY'
-          import json, os, pathlib, subprocess
-          previous = json.loads(pathlib.Path('.github/upstream-yrs.json').read_text())
-          revision = subprocess.check_output(['git', '-C', os.environ['RUNNER_TEMP'] + '/y-crdt', 'rev-parse', 'HEAD'], text=True).strip()
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-              output.write(f'changed={str(revision != previous["revision"]).lower()}\n')
-          if revision != previous['revision']:
-              pathlib.Path('.github/upstream-yrs-pending.json').write_text(json.dumps({'revision': revision}, indent=2) + '\n')
-              pathlib.Path(os.environ['RUNNER_TEMP'], 'yswift-upstream-pr.md').write_text(f'Update Yrs to [{revision[:12]}](https://github.com/y-crdt/y-crdt/commit/{revision}).\n\nImport or validation failures require manual resolution.\n')
-          PY
+        run: python3 scripts/update-yrs.py --discover
       - name: Import Yrs and rebase the undo fix
         id: update
         if: steps.check.outputs.changed == 'true'
         continue-on-error: true
         run: |
           python3 scripts/test-update-yrs.py
-          python3 scripts/update-yrs.py --source "$RUNNER_TEMP/y-crdt"
-          rm .github/upstream-yrs-pending.json
+          python3 scripts/update-yrs.py --update
       - name: Validate native and Swift changes
         id: validate
         if: steps.check.outputs.changed == 'true' && steps.update.outcome == 'success' && steps.update.outputs.conflicts == 'false'
@@ -151,7 +181,6 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ github.event.repository.default_branch }}
-          persist-credentials: false
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
           name: yrs-update
@@ -160,15 +189,34 @@ jobs:
       - name: Apply the prepared update
         run: |
           git apply --index --include='.github/upstream-yrs*.json' --include='Package.swift' --include='Package.resolved' --include='lib/Cargo.toml' --include='lib/Cargo.lock' --include='lib/vendor/*' --include='lib/swift/scaffold/*' "$RUNNER_TEMP/yrs-update/update.patch"
+      - name: Commit prepared release update
+        env:
+          BRANCH: codex/yrs-upstream
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Update vendored Yrs to latest stable release'
+          git push --force origin "HEAD:refs/heads/$BRANCH"
       - name: Open or update Yrs pull request
-        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          VALIDATION: ${{ needs.prepare-yrs.outputs.validation }}
         with:
-          branch: codex/yrs-upstream
-          title: Update vendored Yrs from upstream
-          commit-message: Update vendored Yrs from upstream
-          body-path: ${{ runner.temp }}/yrs-update/body.md
-          assignees: ${{ github.repository_owner }}
-          draft: ${{ needs.prepare-yrs.outputs.validation != 'success' && 'always-true' || 'false' }}
+          script: |
+            const fs = require('node:fs');
+            const repo = context.repo;
+            const base = context.payload.repository.default_branch;
+            const head = `${repo.owner}:codex/yrs-upstream`;
+            const title = 'Update vendored Yrs to latest stable release';
+            const body = fs.readFileSync(`${process.env.RUNNER_TEMP}/yrs-update/body.md`, 'utf8');
+            const { data: existing } = await github.rest.pulls.list({ ...repo, base, head, state: 'open' });
+            const draft = process.env.VALIDATION !== 'success';
+            const { data: pr } = existing.length
+              ? await github.rest.pulls.update({ ...repo, pull_number: existing[0].number, title, body })
+              : await github.rest.pulls.create({ ...repo, base, head, title, body, draft });
+            if (draft && !pr.draft) await github.graphql('mutation($id: ID!) { convertPullRequestToDraft(input: {pullRequestId: $id}) { pullRequest { id } } }', { id: pr.node_id });
+            await github.rest.issues.addAssignees({ ...repo, issue_number: pr.number, assignees: [repo.owner] });
+            await core.summary.addLink(`Yrs PR #${pr.number}`, pr.html_url).write();
       - name: Report failed update validation
         if: needs.prepare-yrs.outputs.validation != 'success'
         run: |

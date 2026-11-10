@@ -1,6 +1,8 @@
 {
-  "revision": "23b7f5693bbf9e7d26340c521ee8647f79bdfba2",
-  "version": "0.28.0",
-  "archive_sha256": "52c70dc8beca8666c77612a96889106ca3cd65318609721f464624ff79685da9",
-  "conflicts": []
+  "revision": "0ab918a9df9976f00bd94575dad7dc9d106502ce",
+  "version": "0.28.1",
+  "archive_sha256": "9f7716b4846f9fab489af2ed7ab31c4554f5fe6965ede2392b9cdfed0e5087ff",
+  "conflicts": [
+    "src/undo.rs"
+  ]
 }
